@@ -45,6 +45,16 @@ async def seed_data():
 
 app.include_router(api_router)
 
+@app.get("/")
+async def root():
+    return {
+        "status": "online",
+        "app": settings.APP_NAME,
+        "docs": "/docs",
+        "health": "/health",
+        "api_v1": "/api/v1"
+    }
+
 @app.get("/health")
 async def health_check():
     return {"status": "ok", "app": settings.APP_NAME}
