@@ -11,8 +11,10 @@ export function Topbar() {
     if (pathname === '/') return 'Partner Dashboard';
     if (pathname.startsWith('/gates')) return 'Human Gates Hub';
     if (pathname.startsWith('/clients')) return 'Client Management';
-    if (pathname.startsWith('/documents')) return 'Document Triage';
-    if (pathname.startsWith('/returns')) return 'Returns Assembly';
+    if (pathname.startsWith('/documents')) return 'Document Triage & OCR Hub';
+    if (pathname.startsWith('/returns')) return 'Returns Assembly & 38 Rules';
+    if (pathname.startsWith('/calendar')) return 'Statutory Compliance Calendar';
+    if (pathname.startsWith('/settings')) return 'Platform Settings';
     return 'Platform';
   };
 

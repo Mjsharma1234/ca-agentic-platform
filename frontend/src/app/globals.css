@@ -32,15 +32,17 @@
   --foreground: #0f172a;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0f172a;
-    --foreground: #f8fafc;
-  }
+body {
+  color: #0f172a;
+  background: #ffffff;
+  font-family: var(--font-sans);
 }
 
-body {
-  color: var(--foreground);
-  background: var(--background);
-  font-family: var(--font-sans);
+input, textarea, select {
+  color: #0f172a !important;
+  background-color: #ffffff;
+}
+
+input::placeholder, textarea::placeholder {
+  color: #64748b !important;
 }
