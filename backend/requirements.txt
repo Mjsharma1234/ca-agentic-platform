@@ -13,3 +13,8 @@ celery
 alembic
 python-dateutil
 tenacity
+rapidocr-onnxruntime
+pdfplumber
+pypdfium2
+pillow
+numpy
