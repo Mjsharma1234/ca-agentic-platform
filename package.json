@@ -1,0 +1,10 @@
+{
+  "name": "ca-agentic-platform-root",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "cd frontend && npm install --legacy-peer-deps && npm run build",
+    "start": "cd frontend && npm run start",
+    "dev": "cd frontend && npm run dev"
+  }
+}
