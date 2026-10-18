@@ -1,10 +1,9 @@
 import uuid
 from decimal import Decimal
 from sqlalchemy import Column, String, Boolean, Enum, Numeric, ForeignKey, Integer, Float
-from sqlalchemy.dialects.postgresql import UUID, JSONB
 import enum
 
-from .base import BaseModel, SoftDeleteMixin
+from .base import BaseModel, SoftDeleteMixin, UUID, JSONB
 
 class InvoiceDirection(str, enum.Enum):
     INWARD = "INWARD"

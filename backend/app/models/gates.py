@@ -1,10 +1,9 @@
 import uuid
 from datetime import datetime
 from sqlalchemy import Column, String, Boolean, Enum, DateTime, ForeignKey
-from sqlalchemy.dialects.postgresql import UUID, JSONB
 import enum
 
-from .base import BaseModel
+from .base import BaseModel, UUID, JSONB
 
 class GateStatus(str, enum.Enum):
     PENDING = "PENDING"

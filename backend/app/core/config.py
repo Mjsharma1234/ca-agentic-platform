@@ -2,7 +2,9 @@ from pydantic_settings import BaseSettings
 from typing import List, Optional
 
 class Settings(BaseSettings):
-    DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/ca_platform"
+    DATABASE_URL: str = "sqlite+aiosqlite:///./ca_platform.db"
+    POSTGRES_URL: Optional[str] = "postgresql+asyncpg://postgres:postgres@localhost:5432/ca_platform"
+    USE_SQLITE_FALLBACK: bool = True
     REDIS_URL: str = "redis://localhost:6379/0"
     SECRET_KEY: str = "your-super-secret-key-change-in-production"
     APP_NAME: str = "CA Agentic Compliance Platform"

@@ -2,10 +2,9 @@ import uuid
 from decimal import Decimal
 from datetime import date, datetime
 from sqlalchemy import Column, String, Enum, Numeric, ForeignKey, Date, DateTime
-from sqlalchemy.dialects.postgresql import UUID, JSONB
 import enum
 
-from .base import BaseModel, SoftDeleteMixin
+from .base import BaseModel, SoftDeleteMixin, UUID, JSONB
 
 class ReturnType(str, enum.Enum):
     GSTR1 = "GSTR1"

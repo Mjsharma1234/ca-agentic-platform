@@ -1,10 +1,9 @@
 import uuid
 from sqlalchemy import Column, String, Boolean, Enum, Numeric, ForeignKey
-from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
 import enum
 
-from .base import BaseModel, SoftDeleteMixin
+from .base import BaseModel, SoftDeleteMixin, UUID, JSONB
 
 class ClientType(str, enum.Enum):
     INDIVIDUAL = "INDIVIDUAL"

@@ -60,6 +60,58 @@ async def assemble_return(
     IN_MEMORY_RETURNS.insert(0, new_ret)
     return new_ret
 
+@router.get("/reconciliation")
+async def get_live_reconciliation(client_id: str = "11111111-1111-1111-1111-111111111111"):
+    from ...deterministic_core.seed_data import SAMPLE_PURCHASE_BILLS, SAMPLE_GSTR2B_FEEDS
+    from ...deterministic_core.reconciler import reconcile_books_with_gstr2b
+    
+    # Format invoices for reconciler
+    books = []
+    for b in SAMPLE_PURCHASE_BILLS:
+        books.append({
+            "id": b["id"],
+            "invoice_number": b["inv_no"],
+            "invoice_date": b["date"],
+            "supplier_gstin": b["supplier_gstin"],
+            "supplier_name": b["supplier_name"],
+            "goods_description": b["desc"],
+            "hsn_code": b["hsn"],
+            "taxable_value": b["taxable"],
+            "cgst": b["cgst"],
+            "sgst": b["sgst"],
+            "igst": b["igst"]
+        })
+    
+    reco_summary = reconcile_books_with_gstr2b(books, SAMPLE_GSTR2B_FEEDS)
+    return reco_summary
+
+@router.get("/export-tally-xml")
+async def export_tally_xml(client_id: str = "11111111-1111-1111-1111-111111111111"):
+    from fastapi.responses import Response
+    from ...deterministic_core.seed_data import SAMPLE_PURCHASE_BILLS
+    from ...deterministic_core.tally_bridge import generate_tally_purchase_xml
+    
+    invoices = []
+    for b in SAMPLE_PURCHASE_BILLS:
+        invoices.append({
+            "invoice_number": b["inv_no"],
+            "invoice_date": b["date"],
+            "supplier_gstin": b["supplier_gstin"],
+            "supplier_name": b["supplier_name"],
+            "taxable_value": b["taxable"],
+            "cgst": b["cgst"],
+            "sgst": b["sgst"],
+            "igst": b["igst"],
+            "total_value": b["taxable"] + b["cgst"] + b["sgst"] + b["igst"]
+        })
+    
+    xml_content = generate_tally_purchase_xml(invoices, company_name="Rajesh Fabrics Pvt Ltd")
+    return Response(
+        content=xml_content,
+        media_type="application/xml",
+        headers={"Content-Disposition": "attachment; filename=Tally_Purchase_Import_Vouchers.xml"}
+    )
+
 @router.get("/")
 async def list_returns():
     return IN_MEMORY_RETURNS
@@ -83,8 +135,20 @@ async def get_evidence_pack(return_id: str):
 
 @router.post("/{return_id}/sign")
 async def sign_return(return_id: str, pin: str = Body(default="123456")):
+    import hashlib
     for r in IN_MEMORY_RETURNS:
         if r["id"] == return_id:
             r["status"] = "SIGNED_AND_QUEUED"
-            return {"status": "signed", "ram_wiped": True, "return": r}
+            # Simulate Class 3 DSC hardware token signature
+            dummy_digest = f"{return_id}-GSTN-PAYLOAD-{datetime.utcnow().isoformat()}"
+            pkcs7_hash = hashlib.sha256(dummy_digest.encode()).hexdigest().upper()
+            r["dsc_signature_hash"] = f"SHA256withRSA:{pkcs7_hash[:32]}..."
+            return {
+                "status": "signed",
+                "ram_wiped": True,
+                "token_protocol": "PKCS#11 ePass2003",
+                "holding_duration_ms": 240,
+                "dsc_hash": r["dsc_signature_hash"],
+                "return": r
+            }
     return {"status": "signed", "ram_wiped": True, "return_id": return_id}

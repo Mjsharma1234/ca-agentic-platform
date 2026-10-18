@@ -1,10 +1,10 @@
 import uuid
 from datetime import datetime
 from sqlalchemy import Column, String, DateTime, Enum, Float
-from sqlalchemy.dialects.postgresql import UUID, JSONB
 import enum
 
 from ..core.database import Base
+from .base import UUID, JSONB
 
 class ActionType(str, enum.Enum):
     EXTRACTED = "EXTRACTED"

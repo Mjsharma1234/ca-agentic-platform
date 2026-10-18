@@ -41,7 +41,11 @@ api_router.include_router(clients_router)
 
 @api_router.post("/seed")
 async def seed_data():
-    return {"message": "Seed endpoint placeholder"}
+    from .core.database import AsyncSessionLocal
+    from .deterministic_core.seed_data import seed_database
+    async with AsyncSessionLocal() as session:
+        result = await seed_database(session)
+        return result
 
 app.include_router(api_router)
 
