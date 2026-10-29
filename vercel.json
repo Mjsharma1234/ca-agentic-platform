@@ -1,0 +1,8 @@
+{
+  "version": 2,
+  "cleanUrls": true,
+  "rewrites": [
+    { "source": "/", "destination": "/firm_os_web/index.html" },
+    { "source": "/(.*)", "destination": "/firm_os_web/$1" }
+  ]
+}

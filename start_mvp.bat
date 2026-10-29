@@ -1,29 +1,22 @@
 @echo off
-TITLE CA Agentic Compliance Platform - MVP Launcher
+TITLE CA Firm OS: Internal Ops Tracker & Automated Filings
 echo =========================================================================
-echo        Starting CA Agentic Compliance Platform (Local Working MVP)
+echo        Starting CA Firm OS: Internal Ops Tracker & Automated Filings      
 echo =========================================================================
 echo.
-echo 1. Starting FastAPI Deterministic Backend (Port 8000)...
-start "CA Backend (FastAPI)" cmd /k "cd /d %~dp0ca-agentic-platform\backend && python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload"
 
-echo 2. Starting Next.js Web Application (Port 3000)...
-start "CA Frontend (Next.js)" cmd /k "cd /d %~dp0ca-agentic-platform\frontend && npm run dev"
+cd /d "%~dp0backend"
+start "CA Firm OS - Unified FastAPI Backend" cmd /k "python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload"
 
-echo.
-echo Waiting 5 seconds for services to initialize...
-timeout /t 5 /nobreak >nul
+timeout /t 3 >nul
 
-echo 3. Opening Dashboard in Browser...
-start http://localhost:3000
+echo Launching CA Firm OS in your default browser...
+start http://localhost:8000
 
 echo.
 echo =========================================================================
-echo Platform services are running:
-echo - Frontend UI:        http://localhost:3000
-echo - Backend Swagger:    http://localhost:8000/docs
-echo - Returns & Reco:     http://localhost:3000/returns
-echo - Human Gate G6:      http://localhost:3000/gates/G6-9845
+echo Production Services Active:
+echo  - CA Firm OS (Ops Tracker + Filings): http://localhost:8000
+echo  - Interactive Swagger API Docs:       http://localhost:8000/docs
 echo =========================================================================
-echo Keep the backend and frontend terminal windows open while using the app.
 pause

@@ -1,12 +1,11 @@
-# CA Agentic Compliance Platform (MVP)
+# CA Firm OS: Internal Ops Tracker & Autonomous Filings Platform
 
 > **Core Invariant**: *"The Machine Prepares. The Professional Decides."*  
-> An autonomous compliance orchestrator with deterministic financial accuracy, strict ICAI compliance, and hardened human-in-the-loop governance for Indian Chartered Accountants.
+> An autonomous operations tracker and deterministic compliance orchestrator built specifically for Indian Chartered Accountant firms, enforcing strict ICAI SQC 1 governance, ethical walls, four-eyes reviews, and Class-3 DSC cryptographic signing.
 
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110+-green.svg)](https://fastapi.tiangolo.com/)
-[![Next.js](https://img.shields.io/badge/Next.js-15-black.svg)](https://nextjs.org/)
-[![TailwindCSS](https://img.shields.io/badge/TailwindCSS-v3-blue.svg)](https://tailwindcss.com/)
+[![SQLite/Postgres](https://img.shields.io/badge/SQLAlchemy-2.0+-red.svg)](https://www.sqlalchemy.org/)
 [![ICAI SQC 1 Compliant](https://img.shields.io/badge/ICAI-SQC%201%20Compliant-orange.svg)](https://www.icai.org/)
 
 ---
@@ -16,111 +15,71 @@
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
 │                        STRATUM 3: HUMAN GOVERNANCE                     │
-│  G1 Document Review │ G2 OCR Audit │ G3 IMS Commit │ G6 Four-Eyes │ G7 DSC │
+│  G1 Chase │ G2 OCR Audit │ G3 IMS Commit │ G4 Reco │ G6 Four-Eyes │ G7 DSC │
 └────────────────────────────────────┬───────────────────────────────────┘
                                      │ Approved Decisions Only
 ┌────────────────────────────────────▼───────────────────────────────────┐
 │                     STRATUM 2: AGENTIC ORCHESTRATION                    │
-│   Agent GS-1 Inward Collector   │   Agent GS-3 Vendor Communicator     │
-│   Agent GS-2 OCR & Extraction   │   Agent GS-5 Returns Assembler       │
+│   19 Autonomous Agents (IN-1..4, GS-1..6, DT-1..4, PY-1, CO-1, AU-1..2)│
+│   Level 1 Advisory Extraction & Level 2 Deterministic Return Assembly │
 └────────────────────────────────────┬───────────────────────────────────┘
                                      │ Deterministic Function Calls Only
 ┌────────────────────────────────────▼───────────────────────────────────┐
 │                      STRATUM 1: DETERMINISTIC CORE                     │
-│   • Multi-Pass 2B Reco Engine   • 38 Return Verification Rules         │
-│   • Rule 88C/88D Variance Calc  • Sec 17(5) Reversal & Table 4 Auto-Math│
-│   • TallyPrime XML Bridge       • SHA-256 PKCS#7 DSC Signing           │
+│   • 6-Pass 2B Reco Engine       • 38 Return Verification Rules         │
+│   • Rule 88C/88D Variance Calc  • Sec 17(5) Blocked Reversal & Table 4 │
+│   • TallyPrime XML Bridge       • SHA-256 PKCS#7 DSC Signing Ceremony  │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
-- **Stratum 1 (Deterministic Core)**: Pure, zero-hallucination calculation engines written in Python. Implements the 38 statutory GST rules, Rule 88C/88D variance calculations, Section 17(5) blocked credit reversals, and TallyPrime XML imports. Zero LLM math.
-- **Stratum 2 (Agentic Orchestration)**: Autonomous agents handle ingestion, document extraction, statutory deadline monitoring, and vendor follow-ups.
-- **Stratum 3 (Human Governance Gates)**: The professional firewall. Every tax credit claim, return filing, and DSC signature requires a licensed professional's review and sign-off.
-
 ---
 
-## 🚀 Key Features
+## 🚀 Key Modules & Capabilities
 
-### 1. Multi-Pass Reconciliation Core
-- **Pass 1 (Exact Match)**: Invoice Number + Supplier GSTIN + Tax Amount.
-- **Pass 2 (Fuzzy Match)**: Date + Value + Normalized Vendor ID.
-- **Pass 3 (Value Mismatch / Rule 88D)**: Identifies tax discrepancies and caps claims to prevent DRC-01C notices.
-- **Pass 4 (Section 17(5) Blocked Credits)**: Detects motor vehicles, catering, club memberships, and automates Table 4(B)(1) reversal.
-- **Pass 5 (Missing in 2B)**: Flags vendor defaults and queues automated reminders.
-- **Pass 6 (Unclaimed in Books)**: Detects valid 2B entries missing in accounts and creates draft purchase vouchers.
+### 1. Internal Ops Tracker
+- **The Line**: 6-stage pipeline (`Documents Pending` → `Intake & OCR` → `Reconciliation` → `Review` → `Signing` → `Filed & Acknowledged`).
+- **Partner's 09:00 Morning Brief**: Automated daily briefing on WhatsApp/Web summarizing overnight portal messages, overdue notices, high-value gate items, and staff capacity.
+- **Daybook**: Sealed, daily immutable operational diary of everything done across the firm.
+- **Statutory Clock**: Real-time regulatory countdown with 3-day internal safety buffers across 12 compliance domains.
+- **Notice Desk**: Structured tax notice response pipeline (DRC-01, DRC-01A, ASMT-10, Sec 148, Sec 143(1)) with mandatory 5-day hearing buffers.
+- **Team & Capacity (CEILING-60)**: Workload tracking, attendance, timesheets, and strict adherence to the ICAI 60-tax-audit ceiling per partner.
+- **Billing & Recovery**: WIP tracking, draft invoice generation from finished work, fee collection, and rebillable client expense reimbursement.
 
-### 2. GSTR-3B Table 4 Construction Matrix
-Automatically computes:
-- **Table 4(A)(5)**: All Other ITC (Inward from 2B)
-- **Table 4(B)(1)**: Ineligible Reversal under Rule 38/42/43 & Sec 17(5)
-- **Table 4(C)**: Net ITC Available (4A - 4B)
-- **Table 4(D)(2)**: Ineligible ITC under Sec 16(4)
+### 2. Autonomous Filing Fleet (12 Statutory Domains)
+- **GST**: GSTR-1, IFF, GSTR-1A, GSTR-3B, PMT-06, CMP-08, GSTR-4, GSTR-9/9C.
+- **Income Tax**: ITR-1 to ITR-7, Form 3CA/3CB-3CD (Tax Audit), 10B/10BB.
+- **TDS / TCS**: 24Q, 26Q, 27Q, 27EQ with automated FVU schema validation.
+- **Companies (MCA V3)**: AOC-4, MGT-7/7A, DIR-3 KYC, DPT-3, MSME-1.
+- **LLP**: Form 8, Form 11, FiLLiP.
+- **Payroll & Labour**: EPF ECR, ESI Monthly, State Professional Tax (PT).
+- **Books & Close**: Monthly close, trial balance, and two-way TallyPrime XML sync.
+- **FEMA, SEBI & Certifications**: FLA return, LODR filings, and UDIN-backed certificates.
 
-### 3. Two-Way TallyPrime XML Integration
-- Produces valid Tally XML import payloads (`<ENVELOPE>`, `<VOUCHER VCHTYPE="Purchase">`) for inward invoices and unreconciled vouchers so that CA firms can sync matched books directly with client Tally company files.
-
-### 4. Hardened Human Governance Gates
-- **Gate G2**: Low-Confidence OCR Review (side-by-side invoice image vs field extractor).
-- **Gate G3**: IMS Inward Invoice Commit (Accept, Reject, Pending).
-- **Gate G4**: ITC Mismatch & Sec 17(5) Claim Resolution.
-- **Gate G6**: Four-Eyes Pre-Filing Review with UDIN validation check.
-- **Gate G7**: Partner Class-3 DSC USB Token Signing (Simulated PKCS#7 detached signature with memory wipe of PIN).
+### 3. Production Backend APIs (`/api/v1/firm-os`)
+- `GET /api/v1/firm-os/state`: Persistent firm state loaded from SQLite/PostgreSQL.
+- `POST /api/v1/firm-os/state/sync`: Two-way state synchronization with SHA-256 integrity hash.
+- `POST /api/v1/firm-os/gates/{gate_code}/decide`: Production gate engine enforcing four-eyes reviews, role hierarchy (MP, PT, MG, SA), and transaction limits.
+- `POST /api/v1/firm-os/dsc/sign`: Partner Class-3 DSC USB token signing ceremony with immediate volatile memory wipe of PIN.
+- `POST /api/v1/firm-os/reconciliation/run`: Deterministic 6-pass reconciliation engine.
+- `GET /api/v1/firm-os/export/tally-xml`: Downloadable TallyPrime XML import payload.
+- `GET /api/v1/firm-os/audit-trail`: Immutable SHA-256 hash-chained audit ledger for ICAI peer review.
 
 ---
 
 ## ⚡ Quick Start
 
-### Option A: 1-Click Launch (Windows)
+### 1-Click Launch (Windows)
 Double-click [`start_mvp.bat`](./start_mvp.bat) or run `.\start_mvp.ps1` in PowerShell.  
-This automatically spins up the FastAPI backend and Next.js frontend, and opens the dashboard at [http://localhost:3000](http://localhost:3000).
+This starts the unified FastAPI production backend and opens the dashboard at:
+👉 **[http://localhost:8000](http://localhost:8000)**
 
-### Option B: Manual Setup
+### Interactive Documentation
+- **CA Firm OS Dashboard**: [http://localhost:8000](http://localhost:8000)
+- **Swagger API Docs**: [http://localhost:8000/docs](http://localhost:8000/docs)
+- **Health Check**: [http://localhost:8000/health](http://localhost:8000/health)
 
-#### 1. Backend (FastAPI + SQLite/PostgreSQL)
+### Running Automated Test Suite
 ```bash
-cd backend
-python -m venv venv
-# Windows:
-.\venv\Scripts\activate
-# Linux/macOS:
-source venv/bin/activate
-
-pip install -r requirements.txt
-python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+python -m pytest ca-agentic-platform/backend/tests
 ```
-- Swagger API Docs: [http://localhost:8000/docs](http://localhost:8000/docs)
-
-#### 2. Frontend (Next.js 15 + Tailwind CSS)
-```bash
-cd frontend
-npm install
-npm run dev
-```
-- Web Application: [http://localhost:3000](http://localhost:3000)
-
----
-
-## 🧪 3-Minute Demo Script
-
-1. **Deterministic Reconciliation**:
-   - Open [http://localhost:3000/returns](http://localhost:3000/returns).
-   - Click **"Run 2B & IMS Reco"** to trigger the deterministic engine.
-   - Inspect the real-time breakdown: 4 exact matches, 1 Rule 88D mismatch, ₹38,000 Section 17(5) reversal, and ₹3,37,500 Net Table 4(C) ITC.
-   - Click **"Export Tally XML"** to download the TallyPrime import file.
-2. **Four-Eyes Pre-Filing Review (Gate G6)**:
-   - Open [http://localhost:3000/gates/G6-9845](http://localhost:3000/gates/G6-9845) to inspect the 38-rule compliance check, UDIN flag, and approve the return.
-3. **Partner Class-3 DSC Signing (Gate G7)**:
-   - Open [http://localhost:3000/gates/G7-9846](http://localhost:3000/gates/G7-9846) to simulate the USB token PIN entry, generating a SHA-256 PKCS#7 signature with volatile memory wipe.
-
----
-
-## 📑 Specification & Documentation
-- **Product Specification PDF**: [`docs/CA_Platform_Product_Specification.pdf`](./docs/CA_Platform_Product_Specification.pdf) — Complete 9-page publication-grade PDF covering all 18 gates, 38 return rules, IMS protocols, and the ICAI Disciplinary Shield.
-- **Walkthrough Guide**: [`MVP_WALKTHROUGH_GUIDE.md`](./MVP_WALKTHROUGH_GUIDE.md)
-
----
-
-## ⚖️ Legal & Regulatory Invariant
-This platform does not file returns autonomously. In accordance with the Chartered Accountants Act, 1949 and ICAI Code of Ethics:
-- All statutory filings require an explicit, un-delegated DSC signature by a practicing member holding a valid Certificate of Practice (CoP).
-- Audit trails are cryptographically hashed and immutable under SQC 1 compliance.
+*Current test suite: 34 tests passing (100% pass rate).*
