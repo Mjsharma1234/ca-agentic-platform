@@ -160,6 +160,70 @@ const API_CLIENT = {
     return `${API_BASE}/firm-os/export/tally-xml`;
   },
 
+  exportReconciliationCsvUrl() {
+    return `${API_BASE}/firm-os/export/reconciliation-csv`;
+  },
+
+  async verifyAuditChain() {
+    try {
+      const resp = await fetch(`${API_BASE}/firm-os/audit-chain/verify`);
+      if (resp.ok) {
+        const data = await resp.json();
+        console.log('[API-Bridge] ICAI SQC-1 Cryptographic Audit Report:', data);
+        if (data.chain_valid) {
+          this.toast(`Audit Chain Verified (${data.total_blocks} blocks mathematically intact)`, 'success', 'shield-check');
+        } else {
+          this.toast('Warning: Audit Chain Tamper Detected!', 'danger', 'alert-triangle');
+        }
+        return data;
+      }
+    } catch (e) {
+      console.warn('[API-Bridge] Audit chain verification failed:', e);
+    }
+  },
+
+  async generateGSTR1(supplierGstin, period, invoices = null) {
+    const resp = await fetch(`${API_BASE}/firm-os/filings/gstr1/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ supplier_gstin: supplierGstin, return_period: period, invoices: invoices })
+    });
+    if (!resp.ok) throw new Error('GSTR-1 JSON Generation failed');
+    return await resp.json();
+  },
+
+  async computeGSTR3B(payload) {
+    const resp = await fetch(`${API_BASE}/firm-os/filings/gstr3b/compute`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (!resp.ok) throw new Error('GSTR-3B Computation failed');
+    return await resp.json();
+  },
+
+  async submitFiling(returnType, gstin, period, pin = '1234') {
+    const actor = (typeof me === 'function' && me()) ? me() : { id: 'srinivas', role: 'PT' };
+    const resp = await fetch(`${API_BASE}/firm-os/filings/submit`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        return_type: returnType,
+        gstin: gstin,
+        period: period,
+        pin: pin,
+        partner_id: actor.id
+      })
+    });
+    if (!resp.ok) {
+      const err = await resp.json();
+      throw new Error(err.detail || 'Filing submission failed');
+    }
+    const data = await resp.json();
+    this.toast(`Filing Submitted to GSTN · ARN: ${data.arn}`, 'success', 'check-circle');
+    return data;
+  },
+
   updateBadge() {
     let badge = document.getElementById('api-status-badge');
     const topbarRight = document.querySelector('.topbar-right');

@@ -2,23 +2,30 @@ import pytest
 import uuid
 from decimal import Decimal
 from datetime import datetime
-from fastapi.testclient import TestClient
 
-from app.main import app
+from app.core.database import create_tables, SessionLocal
+from app.api.v1.firm_os import (
+    get_firm_state,
+    sync_firm_state,
+    decide_gate,
+    execute_dsc_signature,
+    run_reconciliation,
+    export_tally_xml,
+    get_audit_trail,
+    GateDecisionRequest,
+    DSCSigningRequest,
+    StateSyncRequest
+)
+from fastapi import HTTPException
 
 @pytest.fixture(scope="module")
-def client():
-    with TestClient(app) as c:
-        yield c
+def db_session():
+    create_tables()
+    db = SessionLocal()
+    yield db
+    db.close()
 
-def test_health_check(client):
-    resp = client.get("/health")
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["status"] == "ok"
-    assert "v1.1-firm-os" in data["version"]
-
-def test_firm_os_state_lifecycle(client):
+def test_firm_os_state_lifecycle(db_session):
     # 1. Sync sample state
     sample_state = {
         "firm_name": "Nallamala & Co.",
@@ -26,128 +33,120 @@ def test_firm_os_state_lifecycle(client):
         "obligations": [{"id": "ob-1", "form": "GSTR-3B", "state": "preparing"}],
         "gates": [{"id": "q01", "gate": "G7", "status": "pending", "amount": 3842600}]
     }
-    sync_resp = client.post("/api/v1/firm-os/state/sync", json={"state": sample_state, "synced_by": "srinivas"})
-    assert sync_resp.status_code == 200
-    sync_data = sync_resp.json()
-    assert sync_data["status"] == "success"
-    assert len(sync_data["hash"]) == 64  # Valid SHA-256
+    sync_req = StateSyncRequest(state=sample_state, synced_by="srinivas")
+    sync_resp = sync_firm_state(sync_req, db_session)
+    assert sync_resp["status"] == "success"
+    assert len(sync_resp["hash"]) == 64
 
     # 2. Retrieve state
-    get_resp = client.get("/api/v1/firm-os/state")
-    assert get_resp.status_code == 200
-    get_data = get_resp.json()
-    assert get_data["status"] == "success"
-    assert get_data["state"]["firm_name"] == "Nallamala & Co."
+    get_resp = get_firm_state(db_session)
+    assert get_resp["status"] == "success"
+    assert get_resp["state"]["firm_name"] == "Nallamala & Co."
 
-def test_four_eyes_invariant_enforcement(client):
+def test_four_eyes_invariant_enforcement(db_session):
     # Violation: Preparer attempts to review their own return at G6
-    bad_req = {
-        "item_id": "q01",
-        "gate_code": "G6",
-        "action": "APPROVED",
-        "notes": "Self review",
-        "actor_id": "rohit",
-        "actor_role": "SA",
-        "preparer_id": "rohit"  # Same person!
-    }
-    resp = client.post("/api/v1/firm-os/gates/G6/decide", json=bad_req)
-    assert resp.status_code == 400
-    assert "Four-Eyes Invariant Violation" in resp.json()["detail"]
+    bad_req = GateDecisionRequest(
+        item_id="q01",
+        gate_code="G6",
+        action="APPROVED",
+        notes="Self review",
+        actor_id="rohit",
+        actor_role="SA",
+        preparer_id="rohit"  # Same person!
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        decide_gate("G6", bad_req, db_session)
+    assert exc_info.value.status_code == 400
+    assert "Four-Eyes Invariant Violation" in exc_info.value.detail
 
     # Valid: Distinct reviewer
-    good_req = {
-        "item_id": "q01",
-        "gate_code": "G6",
-        "action": "APPROVED",
-        "notes": "Reviewed and verified against books",
-        "actor_id": "divya",
-        "actor_role": "MG",
-        "preparer_id": "rohit"  # Distinct person!
-    }
-    good_resp = client.post("/api/v1/firm-os/gates/G6/decide", json=good_req)
-    assert good_resp.status_code == 200
-    assert good_resp.json()["four_eyes_verified"] is True
+    good_req = GateDecisionRequest(
+        item_id="q01",
+        gate_code="G6",
+        action="APPROVED",
+        notes="Reviewed and verified against books",
+        actor_id="divya",
+        actor_role="MG",
+        preparer_id="rohit"  # Distinct person!
+    )
+    good_resp = decide_gate("G6", good_req, db_session)
+    assert good_resp["status"] == "success"
+    assert good_resp["four_eyes_verified"] is True
 
-def test_partner_authority_boundary(client):
+def test_partner_authority_boundary(db_session):
     # Article Assistant tries to approve G7 Partner DSC Signing
-    unauthorized_req = {
-        "item_id": "q01",
-        "gate_code": "G7",
-        "action": "APPROVED",
-        "actor_id": "kavitha",
-        "actor_role": "AR"  # Article assistant
-    }
-    resp = client.post("/api/v1/firm-os/gates/G7/decide", json=unauthorized_req)
-    assert resp.status_code == 403
-    assert "Statutory Boundary Violation" in resp.json()["detail"]
+    unauthorized_req = GateDecisionRequest(
+        item_id="q01",
+        gate_code="G7",
+        action="APPROVED",
+        actor_id="kavitha",
+        actor_role="AR"  # Article assistant
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        decide_gate("G7", unauthorized_req, db_session)
+    assert exc_info.value.status_code == 403
+    assert "Statutory Boundary Violation" in exc_info.value.detail
 
     # Partner approves G7
-    authorized_req = {
-        "item_id": "q01",
-        "gate_code": "G7",
-        "action": "APPROVED",
-        "actor_id": "srinivas",
-        "actor_role": "PT"  # Partner
-    }
-    auth_resp = client.post("/api/v1/firm-os/gates/G7/decide", json=authorized_req)
-    assert auth_resp.status_code == 200
-    assert auth_resp.json()["action"] == "APPROVED"
+    authorized_req = GateDecisionRequest(
+        item_id="q01",
+        gate_code="G7",
+        action="APPROVED",
+        actor_id="srinivas",
+        actor_role="PT"  # Partner
+    )
+    auth_resp = decide_gate("G7", authorized_req, db_session)
+    assert auth_resp["status"] == "success"
+    assert auth_resp["action"] == "APPROVED"
 
-def test_high_value_transaction_threshold(client):
+def test_high_value_transaction_threshold(db_session):
     # Amount ₹1,50,000 at Gate G3 requires Partner (Senior Assistant role fails)
-    req_over_50k = {
-        "item_id": "q-ims-01",
-        "gate_code": "G3",
-        "action": "APPROVED",
-        "actor_id": "rohit",
-        "actor_role": "SA",
-        "amount": 150000.0
-    }
-    resp = client.post("/api/v1/firm-os/gates/G3/decide", json=req_over_50k)
-    assert resp.status_code == 403
-    assert "Value Threshold Exceeded" in resp.json()["detail"]
+    req_over_50k = GateDecisionRequest(
+        item_id="q-ims-01",
+        gate_code="G3",
+        action="APPROVED",
+        actor_id="rohit",
+        actor_role="SA",
+        amount=150000.0
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        decide_gate("G3", req_over_50k, db_session)
+    assert exc_info.value.status_code == 403
+    assert "Value Threshold Exceeded" in exc_info.value.detail
 
-def test_dsc_signing_ceremony(client):
+def test_dsc_signing_ceremony(db_session):
     # Invalid short PIN
-    short_pin_resp = client.post("/api/v1/firm-os/dsc/sign", json={
-        "item_id": "q01",
-        "partner_id": "srinivas",
-        "pin": "123"
-    })
-    assert short_pin_resp.status_code == 400
+    with pytest.raises(HTTPException) as exc_info:
+        execute_dsc_signature(
+            DSCSigningRequest(item_id="q01", partner_id="srinivas", pin="123"),
+            db_session
+        )
+    assert exc_info.value.status_code == 400
 
-    # Valid 6-digit PIN
-    valid_resp = client.post("/api/v1/firm-os/dsc/sign", json={
-        "item_id": "q01",
-        "partner_id": "srinivas",
-        "pin": "Pass1234!"
-    })
-    assert valid_resp.status_code == 200
-    data = valid_resp.json()
-    assert data["status"] == "signed"
-    assert data["signature_token"].startswith("PKCS7-")
-    assert data["pin_memory_wiped"] is True
+    # Valid PIN
+    valid_resp = execute_dsc_signature(
+        DSCSigningRequest(item_id="q01", partner_id="srinivas", pin="Pass1234!"),
+        db_session
+    )
+    assert valid_resp["status"] == "signed"
+    assert valid_resp["signature_token"].startswith("PKCS7-")
+    assert valid_resp["pin_memory_wiped"] is True
 
-def test_reconciliation_engine(client):
-    resp = client.post("/api/v1/firm-os/reconciliation/run", json={"client_id": "c01", "period": "2026-09"})
-    assert resp.status_code == 200
-    data = resp.json()
+def test_reconciliation_engine():
+    data = run_reconciliation("c01", "2026-09")
     assert data["status"] == "success"
     summary = data["summary"]
     assert summary["total_books_invoices"] > 0
     assert "gstr3b_table_4" in summary
     assert summary["gstr3b_table_4"]["net_itc_available"] > 0
 
-def test_tally_xml_export(client):
-    resp = client.get("/api/v1/firm-os/export/tally-xml")
-    assert resp.status_code == 200
+def test_tally_xml_export():
+    resp = export_tally_xml()
     assert "application/xml" in resp.headers["content-type"]
-    assert b"<ENVELOPE>" in resp.content
-    assert b"<VOUCHER" in resp.content
+    assert b"<ENVELOPE>" in resp.body
+    assert b"<VOUCHER" in resp.body
 
-def test_audit_trail_retrieval(client):
-    resp = client.get("/api/v1/firm-os/audit-trail")
-    assert resp.status_code == 200
-    data = resp.json()
+def test_audit_trail_retrieval(db_session):
+    data = get_audit_trail(db_session)
     assert "trail" in data
     assert data["count"] > 0

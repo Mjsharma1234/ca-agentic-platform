@@ -6,3 +6,4 @@ from .invoices import Invoice
 from .returns import GSTReturn
 from .gates import GateDecision, ObligationState
 from .firm_os import FirmStateModel, ObligationItem, NoticeItem, DaybookEntry, GateApprovalLog
+from .tenant import Firm, User, AuditBlock, FirmConstitution, PlanTier, UserRole

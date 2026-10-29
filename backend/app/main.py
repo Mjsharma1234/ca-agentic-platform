@@ -15,12 +15,12 @@ from .api.v1.dashboard import router as dashboard_router
 from .api.v1.clients import router as clients_router
 from .api.v1.firm_os import router as firm_os_router
 
+# Pre-initialize database tables synchronously
+create_tables()
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: create all tables (including firm_os tables)
-    create_tables()
     yield
-    # Shutdown
 
 app = FastAPI(
     title=settings.APP_NAME,

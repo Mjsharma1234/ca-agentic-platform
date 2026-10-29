@@ -350,3 +350,191 @@ def get_audit_trail(db: Session = Depends(get_db)):
             "gate_id": r.gate_id
         })
     return {"count": len(trail), "trail": trail}
+
+# =====================================================================
+# ENTERPRISE EXTENSIONS: Cryptographic Chain, Automated Filings, & CSV
+# =====================================================================
+
+from ...deterministic_core.audit_chain import append_audit_block, verify_firm_audit_chain
+from ...deterministic_core.filings_engine import (
+    generate_gstr1_payload,
+    compute_gstr3b_liability,
+    simulate_gsp_filing_submission,
+    validate_gstin_format
+)
+from ...models.tenant import Firm
+
+class GSTR1GenerateRequest(BaseModel):
+    supplier_gstin: str = "36AAACN1234F1Z5"
+    return_period: str = "092026"
+    invoices: Optional[List[Dict[str, Any]]] = None
+
+class GSTR3BComputeRequest(BaseModel):
+    outward_taxable: float = 3842600.0
+    outward_igst: float = 245000.0
+    outward_cgst: float = 223417.0
+    outward_sgst: float = 223417.0
+    eligible_itc_igst: float = 180000.0
+    eligible_itc_cgst: float = 195000.0
+    eligible_itc_sgst: float = 195000.0
+    ineligible_itc: float = 12500.0
+    days_delayed: int = 0
+
+class FilingSubmitRequest(BaseModel):
+    return_type: str = "GSTR-3B"
+    gstin: str = "36AAACN1234F1Z5"
+    period: str = "092026"
+    pin: str = "1234"
+    partner_id: str = "srinivas"
+
+@router.get("/audit-chain/verify")
+def verify_audit_chain_endpoint(db: Session = Depends(get_db)):
+    """ICAI SQC-1 Cryptographic Audit Trail Verification.
+    Traverses and mathematically verifies the SHA-256 hash linkage of the audit ledger.
+    """
+    firm = db.execute(select(Firm).where(Firm.firm_code == DEFAULT_FIRM_ID)).scalar_one_or_none()
+    firm_id = firm.id if firm else uuid.UUID("00000000-0000-0000-0000-000000000001")
+    return verify_firm_audit_chain(db, firm_id)
+
+@router.post("/filings/gstr1/generate")
+def generate_gstr1_endpoint(req: GSTR1GenerateRequest):
+    """Generates official GSTN-compliant GSTR-1 JSON package from sales invoices."""
+    invoices = req.invoices or [
+        {
+            "invoice_number": "INV-2026-001",
+            "invoice_date": "14-09-2026",
+            "customer_gstin": "36AABCB2212R1Z8",
+            "pos": "36",
+            "taxable_value": 450000.0,
+            "tax_rate": 18.0,
+            "hsn_code": "998311"
+        },
+        {
+            "invoice_number": "INV-2026-002",
+            "invoice_date": "22-09-2026",
+            "customer_gstin": "29AAACV5514E1Z3",
+            "pos": "29",
+            "taxable_value": 780000.0,
+            "tax_rate": 18.0,
+            "hsn_code": "998312"
+        }
+    ]
+    try:
+        return generate_gstr1_payload(req.supplier_gstin, req.return_period, invoices)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@router.post("/filings/gstr3b/compute")
+def compute_gstr3b_endpoint(req: GSTR3BComputeRequest):
+    """Computes Table 3.1 liabilities, Table 4 ITC set-off, and Section 50 statutory interest."""
+    return compute_gstr3b_liability(
+        outward_taxable=req.outward_taxable,
+        outward_igst=req.outward_igst,
+        outward_cgst=req.outward_cgst,
+        outward_sgst=req.outward_sgst,
+        eligible_itc_igst=req.eligible_itc_igst,
+        eligible_itc_cgst=req.eligible_itc_cgst,
+        eligible_itc_sgst=req.eligible_itc_sgst,
+        ineligible_itc=req.ineligible_itc,
+        days_delayed=req.days_delayed
+    )
+
+@router.post("/filings/submit")
+def submit_statutory_filing(req: FilingSubmitRequest, db: Session = Depends(get_db)):
+    """Simulates GSTN GSP API submission gateway with Partner DSC cryptographic sign-off.
+    Issues Application Reference Number (ARN) and logs immutable audit block.
+    """
+    if req.pin != "1234" and len(req.pin) < 4:
+        raise HTTPException(status_code=401, detail="Invalid DSC token hardware PIN")
+
+    # Generate cryptographic token signature
+    dsc_signature = hashlib.sha256(f"DSC|{req.partner_id}|{req.gstin}|{req.period}|{datetime.utcnow().isoformat()}".encode()).hexdigest()
+    
+    # Process through filing gateway
+    filing_res = simulate_gsp_filing_submission(
+        return_type=req.return_type,
+        gstin=req.gstin,
+        period=req.period,
+        dsc_signature=dsc_signature,
+        partner_id=req.partner_id
+    )
+
+    # Append to cryptographic audit chain
+    firm = db.execute(select(Firm).where(Firm.firm_code == DEFAULT_FIRM_ID)).scalar_one_or_none()
+    firm_id = firm.id if firm else uuid.UUID("00000000-0000-0000-0000-000000000001")
+    append_audit_block(
+        db=db,
+        firm_id=firm_id,
+        actor_id=req.partner_id,
+        actor_role="PT",
+        action="GOVERNMENT_PORTAL_FILING_RELEASED",
+        entity_type="STATUTORY_RETURN",
+        entity_id=filing_res["arn"],
+        payload={
+            "arn": filing_res["arn"],
+            "return_type": req.return_type,
+            "gstin": req.gstin,
+            "period": req.period,
+            "dsc_hash": dsc_signature
+        }
+    )
+
+    return filing_res
+
+@router.get("/export/reconciliation-csv")
+def export_reconciliation_csv():
+    """Generates enterprise CSV reconciliation mismatch report."""
+    invoices = SAMPLE_PURCHASE_BILLS
+    reconciled = reconcile_books_with_gstr2b(invoices, SAMPLE_GSTR2B_FEEDS)
+
+    csv_rows = [
+        "Status,Invoice Number,Invoice Date,Supplier GSTIN,Supplier Name,Books Value,2B Value,Variance,Action Required"
+    ]
+
+    for item in reconciled.get("matched", []):
+        csv_rows.append(
+            f"MATCHED,{item.get('invoice_number')},{item.get('date', '2026-09-15')},{item.get('supplier_gstin')},{item.get('supplier_name', 'Vendor')},{item.get('books_val', 0)},{item.get('feed_val', 0)},0.00,ACCEPT_ITC"
+        )
+    for item in reconciled.get("mismatched", []):
+        diff = float(item.get('books_val', 0)) - float(item.get('feed_val', 0))
+        csv_rows.append(
+            f"MISMATCHED,{item.get('invoice_number')},{item.get('date', '2026-09-15')},{item.get('supplier_gstin')},{item.get('supplier_name', 'Vendor')},{item.get('books_val', 0)},{item.get('feed_val', 0)},{diff:.2f},HOLD_FOR_CORRECTION"
+        )
+    for item in reconciled.get("missing_in_2b", []):
+        csv_rows.append(
+            f"MISSING_IN_GSTR2B,{item.get('invoice_number')},{item.get('date', '2026-09-15')},{item.get('supplier_gstin')},{item.get('supplier_name', 'Vendor')},{item.get('books_val', 0)},0.00,{item.get('books_val', 0)},PROVISIONAL_CHASE_VENDOR"
+        )
+
+    csv_data = "\n".join(csv_rows)
+    return Response(
+        content=csv_data,
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=GSTR2B_Reconciliation_Report.csv"}
+    )
+
+@router.get("/client-portal/{client_code}/summary")
+def get_client_portal_summary(client_code: str):
+    """Provides client-facing self-service view for filing calendar, obligations, and notices."""
+    return {
+        "status": "success",
+        "client_code": client_code,
+        "client_name": "Zenith Infotech Solutions Pvt Ltd" if client_code == "c01" else f"Client {client_code}",
+        "gstin": "36AAACN1234F1Z5",
+        "current_period": "September 2026",
+        "filings": [
+            {"form": "GSTR-1", "due_date": "2026-10-11", "status": "Draft Prepared", "action_required": "Review & Consent"},
+            {"form": "GSTR-3B", "due_date": "2026-10-20", "status": "Ready for Signing", "action_required": "None (CA Signing with DSC)"},
+            {"form": "TDS 26Q", "due_date": "2026-10-31", "status": "Challan Reconciled", "action_required": "None"}
+        ],
+        "active_notices": [
+            {
+                "notice_id": "NOT-2026-88",
+                "authority": "GST Department, Range IV",
+                "section": "ASMT-10",
+                "issue": "ITC difference between GSTR-2A vs GSTR-3B",
+                "reply_deadline": "2026-11-05",
+                "status": "Drafting Response by Manager"
+            }
+        ]
+    }
+

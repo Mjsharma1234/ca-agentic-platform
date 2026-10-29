@@ -3,10 +3,15 @@
 > **Core Invariant**: *"The Machine Prepares. The Professional Decides."*  
 > An autonomous operations tracker and deterministic compliance orchestrator built specifically for Indian Chartered Accountant firms, enforcing strict ICAI SQC 1 governance, ethical walls, four-eyes reviews, and Class-3 DSC cryptographic signing.
 
+[![Live on Vercel](https://img.shields.io/badge/Vercel-Live%20Production-black?logo=vercel)](https://firmosweb.vercel.app)
+[![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white)](docker-compose.yml)
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110+-green.svg)](https://fastapi.tiangolo.com/)
-[![SQLite/Postgres](https://img.shields.io/badge/SQLAlchemy-2.0+-red.svg)](https://www.sqlalchemy.org/)
-[![ICAI SQC 1 Compliant](https://img.shields.io/badge/ICAI-SQC%201%20Compliant-orange.svg)](https://www.icai.org/)
+[![SQLAlchemy](https://img.shields.io/badge/SQLAlchemy-2.0+-red.svg)](https://www.sqlalchemy.org/)
+[![ICAI SQC 1 Compliant](https://img.shields.io/badge/ICAI-SQC%201%20Cryptographic%20Verified-orange.svg)](https://www.icai.org/)
+
+* **Live Web App**: [https://firmosweb.vercel.app](https://firmosweb.vercel.app)
+* **GitHub Repository**: [https://github.com/Mjsharma1234/ca-agentic-platform](https://github.com/Mjsharma1234/ca-agentic-platform)
 
 ---
 
