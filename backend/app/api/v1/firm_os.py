@@ -778,4 +778,53 @@ def trigger_portal_live_sync(req: PortalSyncRequest):
         }
     }
 
+# =====================================================================
+# LIVE STATUTORY CALENDAR: Real-Time GSTN & Income Tax Portal Sync
+# =====================================================================
+
+from ...deterministic_core.statutory_calendar_live import live_calendar_engine
+
+@router.get("/statutory-calendar/live")
+def get_live_statutory_calendar():
+    """Fetches real-time statutory calendar deadlines and active government notifications.
+    Includes automated countdowns, penalty calculation rules, and 3-day internal safety buffers.
+    """
+    calendar = live_calendar_engine.compute_statutory_calendar()
+    notifications = live_calendar_engine.get_active_government_notifications()
+    return {
+        "status": "LIVE_CALENDAR_ACTIVE",
+        "total_deadlines": len(calendar),
+        "deadlines": calendar,
+        "active_notifications": notifications,
+        "internal_safe_buffer_days": 3
+    }
+
+@router.post("/statutory-calendar/sync")
+def sync_live_statutory_calendar(db: Session = Depends(get_db)):
+    """Triggers live handshake with GSTN and Income Tax portals to pull real-time due dates.
+    Logs synchronization to the ICAI SQC-1 Cryptographic Audit Chain.
+    """
+    sync_report = live_calendar_engine.sync_live()
+
+    # Append to cryptographic audit chain
+    firm = db.execute(select(Firm).where(Firm.firm_code == DEFAULT_FIRM_ID)).scalar_one_or_none()
+    firm_id = firm.id if firm else uuid.UUID("00000000-0000-0000-0000-000000000001")
+    append_audit_block(
+        db=db,
+        firm_id=firm_id,
+        actor_id="system-live-sync",
+        actor_role="SYSTEM",
+        action="GOVERNMENT_PORTAL_DUE_DATES_SYNCED",
+        entity_type="STATUTORY_CALENDAR",
+        entity_id=sync_report["calendar_hash"][:16],
+        payload={
+            "calendar_hash": sync_report["calendar_hash"],
+            "portals": sync_report["portals"],
+            "deadlines_count": sync_report["total_deadlines_tracked"]
+        }
+    )
+
+    return sync_report
+
+
 

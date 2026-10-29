@@ -23,6 +23,8 @@ from app.api.v1.firm_os import (
     list_employee_members,
     get_live_tracker_telemetry,
     trigger_portal_live_sync,
+    get_live_statutory_calendar,
+    sync_live_statutory_calendar,
     CreateEmployeeRequest,
     PortalSyncRequest,
     GateDecisionRequest,
@@ -277,4 +279,23 @@ def test_live_tracker_telemetry_and_portal_sync(db_session):
     assert sync_res["status"] == "PORTAL_SYNC_COMPLETED"
     assert sync_res["handshake_latency_ms"] > 0
     assert sync_res["updates_detected"]["new_vendor_invoices_in_2b"] > 0
+
+def test_live_statutory_calendar_deadlines_and_buffers():
+    cal = get_live_statutory_calendar()
+    assert cal["status"] == "LIVE_CALENDAR_ACTIVE"
+    assert cal["total_deadlines"] >= 10
+    assert cal["internal_safe_buffer_days"] == 3
+    forms = [d["form"] for d in cal["deadlines"]]
+    assert "GSTR-1" in forms
+    assert "GSTR-3B" in forms
+    assert "Form 3CA / 3CB - 3CD" in forms
+
+def test_live_statutory_calendar_portal_sync_handshake(db_session):
+    sync_res = sync_live_statutory_calendar(db_session)
+    assert sync_res["status"] == "SYNCED_WITH_PORTALS"
+    assert "gstn" in sync_res["portals"]
+    assert "incometax" in sync_res["portals"]
+    assert len(sync_res["active_government_notifications"]) >= 2
+    assert len(sync_res["calendar_hash"]) == 64
+
 

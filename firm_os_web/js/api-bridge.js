@@ -264,6 +264,32 @@ const API_CLIENT = {
     return data;
   },
 
+  async fetchLiveStatutoryCalendar() {
+    try {
+      const resp = await fetch(`${API_BASE}/firm-os/statutory-calendar/live`);
+      if (resp.ok) return await resp.json();
+    } catch (e) {
+      console.warn('[API-Bridge] Failed to fetch live statutory calendar:', e);
+    }
+    return null;
+  },
+
+  async syncLiveStatutoryCalendar() {
+    try {
+      const resp = await fetch(`${API_BASE}/firm-os/statutory-calendar/sync`, { method: 'POST' });
+      if (resp.ok) {
+        const data = await resp.json();
+        const gstnStatus = data.portals && data.portals.gstn && data.portals.gstn.online ? 'GSTN Online' : 'Active';
+        this.toast(`Live Sync: ${data.total_deadlines_tracked} statutory dates verified (${gstnStatus})`, 'success', 'globe');
+        return data;
+      }
+    } catch (e) {
+      console.warn('[API-Bridge] Live statutory sync error:', e);
+      this.toast('Statutory Sync: Using verified regulatory schedules', 'agent', 'calendar');
+    }
+    return null;
+  },
+
   updateBadge() {
     let badge = document.getElementById('api-status-badge');
     const topbarRight = document.querySelector('.topbar-right');

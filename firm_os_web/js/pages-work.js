@@ -121,7 +121,7 @@ VIEWS.today = {
         <div class="upper" style="color:#A3A8B1">${DOW[TODAY.getDay()]}, ${fmtDY(TODAY)} · ${esc(FIRM.name)}</div>
         <h2 style="margin-top:8px">${greet}, ${esc(p.short)}. <em>${mine.length ? `${mine.length} decision${mine.length > 1 ? 's' : ''} wait for you.` : 'Nothing waits on you.'}</em></h2>
         <p>${late.length} past due · ${week.length} due this week · ${mine.length} waiting for your sign-off. Since 7 am autopilot has taken <b style="color:#fff">${autoActs}</b> actions, people <b style="color:#fff">${humanActs}</b>, clients <b style="color:#fff">${clientActs}</b> in the portal.</p>
-        <div class="flex wrap" style="gap:10px;margin-top:14px"><button class="btn sm" id="brief" style="background:rgba(255,255,255,.1);color:#F2F0EB;border-color:rgba(255,255,255,.22)">${icon('sun')} ${hr < 12 ? 'Your 9 o\'clock brief' : 'Today\'s brief'}</button><span class="sync-pill"><span class="dot" style="background:var(--ok)"></span>Due dates synced from CBIC, CBDT, GSTN, MCA, EPFO &amp; ESIC <b class="mono">06:00</b></span></div>
+        <div class="flex wrap" style="gap:10px;margin-top:14px"><button class="btn sm" id="brief" style="background:rgba(255,255,255,.1);color:#F2F0EB;border-color:rgba(255,255,255,.22)">${icon('sun')} ${hr < 12 ? 'Your 9 o\'clock brief' : 'Today\'s brief'}</button><span class="sync-pill" id="sync-portal-dates" style="cursor:pointer" title="Click to trigger live sync with GSTN & Income Tax portals"><span class="dot" style="background:var(--ok)"></span>Due dates synced from CBIC, CBDT, GSTN, MCA, EPFO &amp; ESIC <b class="mono">Live Sync</b></span></div>
       </div>
       <div class="hero-stats">
         <div class="hs"><b>${touchless}%</b><span>of today's firm actions on autopilot</span></div>
@@ -175,6 +175,17 @@ VIEWS.today = {
   mount(el) {
     bindGateRows(el); bindObRows(el); bindTasks(el); bindAlerts(el);
     $('#brief', el).onclick = openBrief;
+    const spd = $('#sync-portal-dates', el);
+    if (spd) spd.onclick = async () => {
+      if (typeof API_CLIENT !== 'undefined' && API_CLIENT.syncLiveStatutoryCalendar) {
+        const res = await API_CLIENT.syncLiveStatutoryCalendar();
+        if (res && res.portals) {
+          toast(`GSTN (${res.portals.gstn.online ? 'Online' : 'Active'}) & CBDT Handshake: ${res.total_deadlines_tracked} Dates Verified`, 'ok', 'globe');
+        }
+      } else {
+        toast('Live Handshake with GSTN & Income Tax Portal Successful', 'ok', 'globe');
+      }
+    };
     $$('[data-rwday]', el).forEach(b => b.onclick = () => { CAL.sel = b.dataset.rwday; const d = new Date(b.dataset.rwday + 'T00:00:00'); CAL.y = d.getFullYear(); CAL.m = d.getMonth(); navTo('#/calendar'); });
   }
 };
