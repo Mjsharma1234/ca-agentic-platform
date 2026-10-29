@@ -27,7 +27,7 @@ VIEWS.team = {
       ${TEAM.filter(t => !['FO'].includes(t.role)).map(t => { const ls = days.map(d => loadOf(t.id, d)); const tot = ls.reduce((a, b) => a + b, 0); return `<tr><td><div class="flex">${avatar(t.id, 'sm')}<span class="small" style="font-weight:600">${esc(t.short)}</span><span class="chip ${st(t.status)}" style="height:20px;font-size:10.5px">${esc(t.status.split(' ·')[0])}</span></div></td>${ls.map((n, i) => `<td class="r"><span style="display:inline-grid;place-items:center;width:26px;height:26px;border-radius:7px;font:600 11.5px var(--font-mono);background:${n ? `color-mix(in srgb, ${n > 4 ? 'var(--bad)' : n > 2 ? 'var(--warn)' : 'var(--ink-3)'} ${n > 2 ? Math.min(95, 40 + n * 10) : 14 + n * 10}%, transparent)` : 'transparent'};color:${n > 2 ? '#fff' : 'var(--ink-2)'}">${n || '·'}</span></td>`).join('')}<td class="r num"><b>${tot}</b></td></tr>`; }).join('')}
       </tbody></table></div></div>
     <div class="grid g-main">
-      <div class="card"><div class="card-h"><h3>The team</h3><div class="right"><button class="btn xs" id="claim">${icon('rupee')} Claim expense</button>${isPartner() ? `<button class="btn xs" id="realloc">${icon('users')} Reallocate work</button>` : ''}</div></div><div class="list">${TEAM.map(t => { const prep = open.filter(o => o.prep === t.id).length, rev = open.filter(o => o.rev === t.id).length; const clients = Object.values(STATE.walls).filter(v => v.includes(t.id)).length; return `<div class="row">${avatar(t.id, 'lg')}<div class="grow"><div class="t1">${esc(t.name)} <span class="chip outline" style="margin-left:4px">${ROLES[t.role].short}</span></div><div class="t2">${esc(t.focus)} · ${(STATE.caps.all_clients || []).includes(t.role) ? 'all' : clients} clients · ${prep} preparing · ${rev} reviewing</div></div><span class="chip ${st(t.status)}">${esc(t.status)}</span>${showCost && t.cost ? `<span class="num small muted" style="width:90px;text-align:right">${inr(t.cost)}/mo</span>` : ''}</div>`; }).join('')}</div></div>
+      <div class="card"><div class="card-h"><h3>The team</h3><div class="right"><button class="btn xs" id="claim">${icon('rupee')} Claim expense</button>${isPartner() ? `<button class="btn xs" id="realloc">${icon('users')} Reallocate work</button><button class="btn xs primary" id="add-employee" style="margin-left:6px">${icon('plus')} Add employee / Issue ID</button>` : ''}</div></div><div class="list">${TEAM.map(t => { const prep = open.filter(o => o.prep === t.id).length, rev = open.filter(o => o.rev === t.id).length; const clients = Object.values(STATE.walls).filter(v => v.includes(t.id)).length; return `<div class="row">${avatar(t.id, 'lg')}<div class="grow"><div class="t1">${esc(t.name)} <span class="chip outline" style="margin-left:4px">${ROLES[t.role].short}</span></div><div class="t2">${esc(t.focus)} · ${(STATE.caps.all_clients || []).includes(t.role) ? 'all' : clients} clients · ${prep} preparing · ${rev} reviewing</div></div><span class="chip ${st(t.status)}">${esc(t.status)}</span>${showCost && t.cost ? `<span class="num small muted" style="width:90px;text-align:right">${inr(t.cost)}/mo</span>` : ''}</div>`; }).join('')}</div></div>
       <div class="grid" style="gap:16px;align-content:start">
         <div class="card"><div class="card-h"><h3>Attendance register · today<small>Captured from sign-in, VPN and client-site geo check-ins</small></h3></div><div class="list">${TEAM.map(p => `<div class="row" style="min-height:44px">${avatar(p.id, 'sm')}<div class="grow small"><b>${esc(p.short)}</b></div><span class="small ${/leave/i.test(p.status) ? '' : 'mono'}">${/leave/i.test(p.status) ? '<span class="chip warn">On leave</span>' : esc(CHECKINS[p.id] || '—')}</span></div>`).join('')}</div></div>
         <div class="card"><div class="card-h"><h3>Leave requests</h3></div><div class="list">${STATE.leaves.map((l, i) => `<div class="row">${avatar(l.who, 'sm')}<div class="grow"><div class="t1">${esc(actorName(l.who))} · ${esc(l.kind)}</div><div class="t2">${fmtD(l.from)} – ${fmtD(l.to)}${l.clash ? ` · <span style="color:var(--bad-ink)">${esc(l.clash)}</span>` : ''}</div></div>${l.status === 'Pending' ? (['MP', 'PT', 'MG'].includes(me().role) ? `<button class="btn xs" data-lv="${i}" data-v="Declined">Decline</button><button class="btn xs ok" data-lv="${i}" data-v="Approved">Approve</button>` : '<span class="chip warn">Pending</span>') : `<span class="chip ${l.status === 'Approved' ? 'ok' : 'outline'}">${l.status}</span>`}</div>`).join('')}</div></div>
@@ -39,9 +39,153 @@ VIEWS.team = {
   mount(el) {
     $$('[data-lv]', el).forEach(b => b.onclick = () => { const l = STATE.leaves[+b.dataset.lv]; l.status = b.dataset.v; ledgerAdd({ actor: me().id, kind: 'human', action: `${b.dataset.v.toLowerCase()} leave for ${actorName(l.who)}`, obj: 'Leave' }); save(); toast(`Leave ${b.dataset.v.toLowerCase()}`, 'ok'); rerender(); });
     const ra = $('#realloc', el); if (ra) ra.onclick = openRealloc;
+    const ae = $('#add-employee', el); if (ae) ae.onclick = openAddEmployee;
     $('#claim', el).onclick = openExpenseClaim;
   }
 };
+function openAddEmployee() {
+  openSheet({
+    title: 'Onboard Staff & Issue Employee ID',
+    sub: 'Partner Authority (SQC 1) · Generates unique firm ID, sets access boundaries, and seals into audit ledger.',
+    wide: true,
+    body: `
+      <div class="card pad mb16">
+        <div class="grid g2" style="gap:14px">
+          <div>
+            <label class="label">Full Name</label>
+            <input class="input" id="emp-name" placeholder="e.g. CA Ananya Sharma" style="width:100%">
+          </div>
+          <div>
+            <label class="label">Firm Role & Authority</label>
+            <select class="input" id="emp-role" style="width:100%">
+              <option value="AR">Article Trainee (AR) — Intake & prep</option>
+              <option value="SA">Senior Assistant (SA) — Reconciliations</option>
+              <option value="MG">Manager (MG) — G6 Four-Eyes review</option>
+              <option value="PT">Partner (PT) — G7 DSC & G12 Filing</option>
+              <option value="PX">Paid Assistant (PX)</option>
+            </select>
+          </div>
+          <div>
+            <label class="label">Official Email</label>
+            <input class="input" id="emp-email" type="email" placeholder="ananya@nallamala.in" style="width:100%">
+          </div>
+          <div>
+            <label class="label">Mobile Number</label>
+            <input class="input" id="emp-phone" placeholder="9876543210" style="width:100%">
+          </div>
+          <div>
+            <label class="label">ICAI Membership / Student Reg No.</label>
+            <input class="input" id="emp-mno" placeholder="e.g. 298124 or SRO-049812" style="width:100%">
+          </div>
+          <div>
+            <label class="label">Assigned Practice Focus</label>
+            <input class="input" id="emp-focus" placeholder="e.g. GST & Rule 88D Reconciliations" style="width:100%">
+          </div>
+          <div>
+            <label class="label">Monthly Cost / Stipend (₹)</label>
+            <input class="input" id="emp-cost" type="number" value="15000" style="width:100%">
+          </div>
+        </div>
+      </div>
+      <div class="callout agent">
+        ${icon('shield')}
+        <div class="small"><b>ICAI SQC-1 Compliance:</b> Generating this ID automatically provisions role-based access control, restricts Article self-approvals, and writes a tamper-evident record into the firm's cryptographic audit chain.</div>
+      </div>
+    `,
+    foot: `<button class="btn primary" id="btn-create-emp">${icon('check')} Issue Employee ID & Credentials</button>`,
+    onMount: el => {
+      const btn = el.querySelector('#btn-create-emp');
+      if (btn) btn.onclick = async () => {
+        const name = (el.querySelector('#emp-name').value || '').trim();
+        const role = el.querySelector('#emp-role').value;
+        const email = (el.querySelector('#emp-email').value || '').trim();
+        const phone = (el.querySelector('#emp-phone').value || '').trim();
+        const mno = (el.querySelector('#emp-mno').value || '').trim();
+        const focus = (el.querySelector('#emp-focus').value || '').trim() || 'General Compliance';
+        const cost = parseFloat(el.querySelector('#emp-cost').value) || 12000;
+
+        if (!name || !email) {
+          toast('Please enter staff name and email', 'warn');
+          return;
+        }
+
+        btn.disabled = true;
+        btn.innerHTML = 'Generating Credentials...';
+
+        try {
+          if (typeof API_CLIENT !== 'undefined' && API_CLIENT.createEmployee) {
+            const res = await API_CLIENT.createEmployee({
+              full_name: name,
+              email: email,
+              role: role,
+              phone: phone,
+              membership_no: mno,
+              focus: focus,
+              stipend_or_cost: cost
+            });
+
+            const empId = res.username || res.employee_id.toLowerCase();
+            TEAM.push({
+              id: empId,
+              name: name,
+              short: name.split(' ')[0],
+              role: role,
+              focus: focus,
+              mno: mno,
+              status: 'In office · Active',
+              cost: cost
+            });
+
+            closeSheet();
+            openSheet({
+              title: 'Employee ID Provisioned',
+              sub: 'Share these initial credentials securely with the team member.',
+              wide: false,
+              body: `
+                <div class="card pad">
+                  <div class="small muted mb8">SYSTEM EMPLOYEE ID</div>
+                  <div class="mono" style="font-size:18px;font-weight:700;color:var(--accent)">${res.employee_id}</div>
+                  <hr style="margin:12px 0;border:0;border-top:1px solid var(--border)">
+                  <div class="grid g2" style="gap:10px;font-size:13px">
+                    <div><b>Username:</b> <span class="mono">${res.username}</span></div>
+                    <div><b>Role:</b> <span class="chip outline">${ROLES[role].short}</span></div>
+                    <div><b>Temp Password:</b> <span class="mono" style="color:var(--ok)">${res.temporary_password}</span></div>
+                    <div><b>ICAI / Reg:</b> <span>${res.membership_or_reg_no}</span></div>
+                  </div>
+                </div>
+              `,
+              foot: `<button class="btn primary" onclick="closeSheet();rerender();">Done</button>`
+            });
+            toast(`Staff ID ${res.employee_id} created`, 'ok', 'user-check');
+            save();
+            rerender();
+          } else {
+            const rand = Math.floor(1000 + Math.random() * 9000);
+            const empId = 'emp_' + rand;
+            TEAM.push({
+              id: empId,
+              name: name,
+              short: name.split(' ')[0],
+              role: role,
+              focus: focus,
+              mno: mno,
+              status: 'In office · Active',
+              cost: cost
+            });
+            closeSheet();
+            toast(`Staff ID EMP-2026-${rand} created`, 'ok', 'user-check');
+            save();
+            rerender();
+          }
+        } catch (err) {
+          btn.disabled = false;
+          btn.innerHTML = 'Issue Employee ID & Credentials';
+          toast(err.message || 'Failed to create employee', 'bad');
+        }
+      };
+    }
+  });
+}
 function openRealloc() {
   const open = STATE.obligations.filter(o => o.state !== 'closed' && daysTo(o.due) >= 0 && daysTo(o.due) <= 10 && ['awaiting', 'received', 'preparing'].includes(o.state));
   const onLeave = TEAM.filter(t => /leave/i.test(t.status)).map(t => t.id);

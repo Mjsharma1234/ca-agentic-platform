@@ -19,10 +19,17 @@ from app.api.v1.firm_os import (
     execute_dsc_signature,
     export_reconciliation_csv,
     get_client_portal_summary,
+    create_employee_id,
+    list_employee_members,
+    get_live_tracker_telemetry,
+    trigger_portal_live_sync,
+    CreateEmployeeRequest,
+    PortalSyncRequest,
     GateDecisionRequest,
     DSCSigningRequest,
     StateSyncRequest
 )
+from fastapi import HTTPException
 
 @pytest.fixture(scope="module")
 def db_session():
@@ -222,3 +229,52 @@ def test_client_portal_summary_endpoint():
     assert portal["client_name"] == "Zenith Infotech Solutions Pvt Ltd"
     assert len(portal["filings"]) >= 3
     assert len(portal["active_notices"]) >= 1
+
+def test_partner_employee_id_creation_and_rbac(db_session):
+    # Partner provisions Manager ID
+    req = CreateEmployeeRequest(
+        full_name="CA Divya Reddy",
+        email=f"divya-{uuid.uuid4().hex[:6]}@nallamala.in",
+        role="MG",
+        membership_no="249812",
+        focus="GST Advisory & Rule 88D Reconciliations",
+        partner_id="srinivas",
+        partner_role="PT"
+    )
+    res = create_employee_id(req, db_session)
+    assert res["status"] == "CREATED"
+    assert res["employee_id"].startswith("EMP-")
+    assert res["role"] == "MG"
+    assert res["role_title"] == "Manager"
+    assert res["sqc1_logged"] is True
+
+def test_employee_creation_non_partner_rejection(db_session):
+    # Article Trainee (AR) attempts to create employee ID
+    unauthorized_req = CreateEmployeeRequest(
+        full_name="Unauthorized Person",
+        email="unauth@nallamala.in",
+        role="AR",
+        partner_id="kavitha",
+        partner_role="AR" # Not a partner!
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        create_employee_id(unauthorized_req, db_session)
+    assert exc_info.value.status_code == 403
+    assert "Statutory Authority Violation" in exc_info.value.detail
+
+def test_live_tracker_telemetry_and_portal_sync(db_session):
+    # Check live tracker
+    telemetry = get_live_tracker_telemetry(db_session)
+    assert telemetry["status"] == "LIVE_TELEMETRY"
+    assert "statutory_clock" in telemetry
+    assert "gstr1" in telemetry["statutory_clock"]
+    assert "gstr3b" in telemetry["statutory_clock"]
+    assert len(telemetry["live_filing_stream"]) >= 3
+    assert "stage_6_filed_and_acknowledged" in telemetry["pipeline_stages"]
+
+    # Trigger live portal sync handshake
+    sync_res = trigger_portal_live_sync(PortalSyncRequest(period="2026-09"))
+    assert sync_res["status"] == "PORTAL_SYNC_COMPLETED"
+    assert sync_res["handshake_latency_ms"] > 0
+    assert sync_res["updates_detected"]["new_vendor_invoices_in_2b"] > 0
+

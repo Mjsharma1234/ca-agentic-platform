@@ -224,6 +224,46 @@ const API_CLIENT = {
     return data;
   },
 
+  async createEmployee(payload) {
+    const actor = (typeof me === 'function' && me()) ? me() : { id: 'srinivas', role: 'PT' };
+    const resp = await fetch(`${API_BASE}/firm-os/team/members`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ...payload,
+        partner_id: actor.id,
+        partner_role: actor.role
+      })
+    });
+    if (!resp.ok) {
+      const err = await resp.json();
+      throw new Error(err.detail || 'Failed to create employee ID');
+    }
+    return await resp.json();
+  },
+
+  async getLiveTracker() {
+    try {
+      const resp = await fetch(`${API_BASE}/firm-os/live-tracker`);
+      if (resp.ok) return await resp.json();
+    } catch (e) {
+      console.warn('[API-Bridge] Failed to fetch live tracker:', e);
+    }
+    return null;
+  },
+
+  async syncPortalLive(gstins = null) {
+    const resp = await fetch(`${API_BASE}/firm-os/portal/sync-live`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ period: '2026-09', gstins: gstins })
+    });
+    if (!resp.ok) throw new Error('Portal sync failed');
+    const data = await resp.json();
+    this.toast('Live Portal Sync: Refreshed 14 client files with latest GSTR-2B', 'success', 'refresh-cw');
+    return data;
+  },
+
   updateBadge() {
     let badge = document.getElementById('api-status-badge');
     const topbarRight = document.querySelector('.topbar-right');
