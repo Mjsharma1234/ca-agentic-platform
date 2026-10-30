@@ -1,4 +1,4 @@
-# Multi-stage production Dockerfile for CA Firm OS backend
+# Multi-stage production Dockerfile for CA Firm OS backend on GCP Cloud Run
 FROM python:3.13-slim AS builder
 
 WORKDIR /app
@@ -32,12 +32,8 @@ ENV PYTHONDONTWRITEBYTECODE=1
 # Copy application source
 COPY . .
 
-# Expose production port
-EXPOSE 8000
+# Cloud Run uses 8080 by default and injects $PORT
+EXPOSE 8080
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8000/api/v1/health || exit 1
-
-# Production server execution via Uvicorn with 4 workers
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]
+# Production server execution via Uvicorn supporting Cloud Run $PORT
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8080} --workers 2"]
