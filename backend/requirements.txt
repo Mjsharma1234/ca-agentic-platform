@@ -19,3 +19,4 @@ pdfplumber
 pypdfium2
 pillow
 numpy
+openpyxl
