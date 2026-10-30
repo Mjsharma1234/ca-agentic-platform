@@ -763,6 +763,17 @@ def trigger_portal_live_sync(req: PortalSyncRequest):
     """Initiates live simulated handshake with GSTN and TRACES GSP endpoints.
     Pulls down latest counter-party GSTR-2B filing feeds and auto-updates reconciliation status.
     """
+    from ...gsp.portal_sync import PortalSyncEngine
+    from ...gsp.client import GSPClient
+
+    engine = PortalSyncEngine(client=GSPClient())
+    gstin_list = req.gstins or ["27AAACR1234F1Z5", "27BBBCM5678G1Z2"]
+    sync_result = engine.check_all_filing_statuses(gstin_list, "GSTR-3B", req.period)
+    
+    # Also fetch live sample 2B for the primary client
+    invoices_2b = engine.sync_client_gstr2b(gstin_list[0], req.period)
+    ims_state = engine.sync_ims_dashboard(gstin_list[0], req.period)
+
     now = datetime.utcnow()
     return {
         "status": "PORTAL_SYNC_COMPLETED",
@@ -770,11 +781,13 @@ def trigger_portal_live_sync(req: PortalSyncRequest):
         "period": req.period,
         "gsp_gateway": "Adaequare GST Suvidha Provider (Production Sandbox)",
         "handshake_latency_ms": 342,
-        "gstins_polled": len(req.gstins) if req.gstins else 14,
+        "gstins_polled": len(gstin_list),
+        "filing_statuses": sync_result,
+        "ims_dashboard": ims_state,
         "updates_detected": {
-            "new_vendor_invoices_in_2b": 28,
-            "itc_available_delta": 412500.0,
-            "status_transition": "All 14 client work files refreshed with latest 2B feeds."
+            "new_vendor_invoices_in_2b": len(invoices_2b),
+            "itc_available_delta": sum(x.get("total_tax", 0.0) for x in invoices_2b),
+            "status_transition": f"All {len(gstin_list)} client work files refreshed with latest 2B feeds."
         }
     }
 
@@ -828,3 +841,84 @@ def sync_live_statutory_calendar(db: Session = Depends(get_db)):
 
 
 
+
+# =====================================================================
+# GOVERNMENT EXTENSIONS & AUTOMATIC DUE DATE RE-DATING
+# =====================================================================
+
+from ...deterministic_core.extension_engine import extension_engine
+from .clients import IN_MEMORY_TASKS
+
+class ApplyExtensionRequest(BaseModel):
+    extension_id: str = "EXT-2026-CBIC-28"
+
+class RegisterExtensionRequest(BaseModel):
+    notification_number: str
+    issuing_authority: str
+    domain: str
+    form_id: str
+    period: str = "Oct 2026"
+    original_due_date: str = "2026-10-20"
+    extended_due_date: str = "2026-10-25"
+    reason: str
+
+@router.get("/statutory-calendar/extensions")
+def list_active_government_extensions():
+    """Lists all active CBIC/CBDT/MCA statutory deadline extension notifications."""
+    extensions = extension_engine.list_active_extensions()
+    return {
+        "status": "SUCCESS",
+        "total_active_extensions": len(extensions),
+        "extensions": extensions
+    }
+
+@router.post("/statutory-calendar/extensions/apply")
+def apply_government_extension(req: ApplyExtensionRequest, db: Session = Depends(get_db)):
+    """
+    Applies an official government deadline extension notification.
+    Automatically re-dates all matching client compliance obligations across the firm,
+    re-calculates the mandatory 3-day internal CA buffer, and appends an immutable
+    cryptographic audit block under ICAI SQC 1.
+    """
+    # Collect all practice tasks across clients
+    all_tasks = []
+    for cid, t_list in IN_MEMORY_TASKS.items():
+        all_tasks.extend(t_list)
+
+    result = extension_engine.apply_extension_to_tasks(all_tasks, req.extension_id)
+
+    # Log to cryptographic audit chain
+    firm = db.execute(select(Firm).where(Firm.firm_code == DEFAULT_FIRM_ID)).scalar_one_or_none()
+    firm_id = firm.id if firm else uuid.UUID("00000000-0000-0000-0000-000000000001")
+    append_audit_block(
+        db=db,
+        firm_id=firm_id,
+        actor_id="statutory-extension-engine",
+        actor_role="SYSTEM",
+        action="STATUTORY_DUE_DATE_EXTENDED",
+        entity_type="GOVERNMENT_EXTENSION",
+        entity_id=req.extension_id,
+        payload={
+            "notification": result["extension"]["notification_number"],
+            "tasks_updated_count": result["tasks_updated_count"],
+            "new_due_date": result["extension"]["extended_due_date"],
+            "audit_hash": result["audit_hash"]
+        }
+    )
+
+    return result
+
+@router.post("/statutory-calendar/extensions/register")
+def register_new_government_extension(req: RegisterExtensionRequest):
+    """Registers a newly announced CBIC / CBDT / MCA extension circular."""
+    created = extension_engine.register_extension(
+        notification_number=req.notification_number,
+        issuing_authority=req.issuing_authority,
+        domain=req.domain,
+        form_id=req.form_id,
+        period=req.period,
+        original_due_date=req.original_due_date,
+        extended_due_date=req.extended_due_date,
+        reason=req.reason
+    )
+    return {"status": "SUCCESS", "extension": created}

@@ -12,7 +12,8 @@ import {
   Calendar,
   AlertTriangle,
   Settings,
-  UserCircle
+  UserCircle,
+  Receipt
 } from "lucide-react";
 import { useState } from "react";
 import { Modal } from "@/components/ui/modal";
@@ -21,6 +22,7 @@ import { Button } from "@/components/ui/button";
 const navItems = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/clients", label: "Clients", icon: Users },
+  { href: "/billing", label: "Billing", icon: Receipt },
   { href: "/documents", label: "Documents", icon: FileText },
   { href: "/gates", label: "Gates Hub", icon: ShieldAlert },
   { href: "/returns", label: "Returns", icon: Briefcase },

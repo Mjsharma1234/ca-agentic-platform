@@ -1,4 +1,5 @@
-from fastapi import APIRouter, Body
+from fastapi import APIRouter, Body, HTTPException
+from datetime import datetime
 import uuid
 
 router = APIRouter(prefix="/returns", tags=["returns"])
@@ -152,3 +153,129 @@ async def sign_return(return_id: str, pin: str = Body(default="123456")):
                 "return": r
             }
     return {"status": "signed", "ram_wiped": True, "return_id": return_id}
+
+
+# =============================================================================
+# GSP / GSTN Portal Integration Endpoints
+# Added: Production-grade GSP layer via PortalSyncEngine
+# =============================================================================
+
+from ...gsp.portal_sync import PortalSyncEngine
+from ...gsp.client import GSPClient
+from pydantic import BaseModel as _BaseModel
+from typing import List as _List, Optional as _Optional
+
+class _FileReturnRequest(_BaseModel):
+    gstin: str
+    period: str
+    return_type: str = "GSTR-3B"
+    payload_json: dict = {}
+    dsc_signature: str = ""
+    partner_id: str = "srinivas"
+
+
+def _sync_engine() -> PortalSyncEngine:
+    """Dependency factory — creates a PortalSyncEngine per request."""
+    return PortalSyncEngine(client=GSPClient())
+
+
+@router.get("/gstr2b/{gstin}/{period}", tags=["gsp"])
+async def get_gstr2b(gstin: str, period: str):
+    """
+    Pull live GSTR-2B inward supply invoices from the GSP portal for the
+    given GSTIN and return period.
+
+    Returns a flat list of normalised invoice objects ready for reconciliation.
+    Period format: YYYY-MM (e.g. 2026-10) or MMYYYY (e.g. 102026).
+    """
+    engine = _sync_engine()
+    invoices = engine.sync_client_gstr2b(gstin, period)
+    return {
+        "status": "success",
+        "gstin": gstin,
+        "period": period,
+        "invoice_count": len(invoices),
+        "invoices": invoices,
+    }
+
+
+@router.get("/ims/{gstin}/{period}", tags=["gsp"])
+async def get_ims_dashboard(gstin: str, period: str):
+    """
+    Fetch the IMS (Invoice Management System) inward invoice dashboard for
+    a GSTIN and period.
+
+    Returns accepted/pending/rejected invoice counts and ITC impact figures.
+    """
+    engine = _sync_engine()
+    data = engine.sync_ims_dashboard(gstin, period)
+    return {"status": "success", "gstin": gstin, "period": period, "ims": data}
+
+
+@router.post("/{return_id}/file", tags=["gsp"])
+async def file_return(return_id: str, req: _FileReturnRequest):
+    """
+    Submit a GST return through the GSP gateway (Gate G8/G9).
+
+    * Calls PortalSyncEngine.file_return → GSPClient.submit_gstr1/submit_gstr3b
+    * On success updates the in-memory return status to FILED and stores ARN
+    * Returns FilingResult with ARN, submitted_at, and partner attribution
+    """
+    engine = _sync_engine()
+    result = engine.file_return(
+        gstin=req.gstin,
+        period=req.period,
+        return_type=req.return_type,
+        payload_json=req.payload_json,
+        dsc_signature=req.dsc_signature,
+        partner_id=req.partner_id,
+    )
+
+    if result.success:
+        # Persist status in in-memory store
+        for r in IN_MEMORY_RETURNS:
+            if r["id"] == return_id:
+                r["status"] = "FILED"
+                r["arn"] = result.arn
+                r["filed_at"] = result.submitted_at or datetime.utcnow().isoformat()
+                r["filed_by"] = req.partner_id
+                break
+        return {
+            "status": "FILED",
+            "return_id": return_id,
+            "arn": result.arn,
+            "submitted_at": result.submitted_at,
+            "partner_id": result.partner_id,
+            "return_type": result.return_type,
+            "gstin": result.gstin,
+            "period": result.period,
+        }
+
+    raise HTTPException(
+        status_code=502,
+        detail={
+            "error": "GSP_SUBMISSION_FAILED",
+            "error_code": result.error_code,
+            "message": result.error_message,
+        },
+    )
+
+
+@router.get("/filing-status/{gstin}/{return_type}/{period}", tags=["gsp"])
+async def get_filing_status(gstin: str, return_type: str, period: str):
+    """
+    Check whether a specific GST return has been filed on the GSTN portal.
+
+    Pass a single GSTIN in the path.  For bulk checking use the
+    POST /returns/filing-status-bulk endpoint.
+    """
+    engine = _sync_engine()
+    statuses = engine.check_all_filing_statuses([gstin], return_type, period)
+    info = statuses.get(gstin, {})
+    return {
+        "status": "success",
+        "gstin": gstin,
+        "return_type": return_type,
+        "period": period,
+        "filing_status": info,
+    }

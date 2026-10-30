@@ -43,3 +43,6 @@ Thumbs.db
 *.swo
 
 .vercel
+
+# TypeScript build cache
+*.tsbuildinfo

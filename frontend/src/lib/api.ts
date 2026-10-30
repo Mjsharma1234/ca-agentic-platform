@@ -81,5 +81,77 @@ export const api = {
 
   signReturn: async (returnId: string) => {
     return api.post(`/returns/${returnId}/sign`);
-  }
+  },
+
+  // ── Billing & Invoicing ──────────────────────────────────────────────────
+
+  getBillingInvoices: async (status?: string, clientId?: string) => {
+    const params = new URLSearchParams();
+    if (status) params.append('status', status);
+    if (clientId) params.append('client_id', clientId);
+    const qs = params.toString() ? `?${params.toString()}` : '';
+    return api.get(`/billing/invoices${qs}`);
+  },
+
+  getBillingInvoice: async (id: string) => {
+    return api.get(`/billing/invoices/${id}`);
+  },
+
+  getBillingSummary: async () => {
+    return api.get('/billing/summary');
+  },
+
+  createInvoice: async (data: any) => {
+    return api.post('/billing/invoices', data);
+  },
+
+  sendInvoice: async (id: string) => {
+    return api.post(`/billing/invoices/${id}/send`);
+  },
+
+  recordPayment: async (
+    id: string,
+    data: { amount: number; payment_date: string; reference: string; tds_deducted: boolean }
+  ) => {
+    return api.post(`/billing/invoices/${id}/record-payment`, data);
+  },
+
+  getRateCard: async () => {
+    return api.get('/billing/rate-card');
+  },
+
+  generateInvoiceFromWork: async (data: any) => {
+    return api.post('/billing/invoices/generate-from-work', data);
+  },
+
+  // ── Client Bulk Import & Auto-Tasks ──
+  importClientsExcel: async (file: File) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    const url = `${API_BASE}/clients/import-excel`;
+    const res = await fetch(url, { method: "POST", body: formData });
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+    return await res.json();
+  },
+
+  generateTasksAll: async () => {
+    return api.post('/clients/generate-tasks-all');
+  },
+
+  generateClientTasks: async (clientId: string) => {
+    return api.post(`/clients/${clientId}/generate-tasks`);
+  },
+
+  getClientTasks: async (clientId: string) => {
+    return api.get(`/clients/${clientId}/tasks`);
+  },
+
+  // ── Government Extension & Auto-Redating ──
+  getActiveExtensions: async () => {
+    return api.get('/statutory-calendar/extensions');
+  },
+
+  applyGovernmentExtension: async (extensionId: string) => {
+    return api.post('/statutory-calendar/extensions/apply', { extension_id: extensionId });
+  },
 };
