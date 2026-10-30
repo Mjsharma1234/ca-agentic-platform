@@ -4,7 +4,6 @@
   "private": true,
   "description": "CA Firm OS - Autonomous Practice Operations & Compliance Platform",
   "scripts": {
-    "build": "echo 'Static Firm OS web build ready'",
     "start": "npx serve firm_os_web",
     "dev": "npx serve firm_os_web"
   }
