@@ -4,6 +4,7 @@
   "private": true,
   "description": "CA Firm OS - Autonomous Practice Operations & Compliance Platform",
   "scripts": {
+    "build": "node -e \"const fs=require('fs'); if (!fs.existsSync('public')) fs.mkdirSync('public'); fs.cpSync('firm_os_web', 'public', {recursive: true}); console.log('Firm OS web copied to public for Vercel deploy');\"",
     "start": "npx serve firm_os_web",
     "dev": "npx serve firm_os_web"
   }
