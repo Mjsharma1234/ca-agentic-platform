@@ -1,11 +1,11 @@
 import type { Metadata } from "next";
 import "./globals.css";
-import { Sidebar } from "@/components/layout/sidebar";
-import { Topbar } from "@/components/layout/topbar";
+import { AuthProvider } from "@/lib/auth-context";
+import { AppShell } from "@/components/layout/app-shell";
 
 export const metadata: Metadata = {
   title: "CA Agentic Platform",
-  description: "AI-powered compliance platform for CA firms",
+  description: "AI-powered compliance and practice management platform for Chartered Accountants",
 };
 
 export default function RootLayout({
@@ -16,15 +16,9 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className="font-sans bg-slate-50 text-slate-900">
-        <div className="flex h-screen overflow-hidden">
-          <Sidebar />
-          <div className="flex-1 flex flex-col h-screen overflow-hidden">
-            <Topbar />
-            <main className="flex-1 overflow-auto bg-slate-50 p-6">
-              {children}
-            </main>
-          </div>
-        </div>
+        <AuthProvider>
+          <AppShell>{children}</AppShell>
+        </AuthProvider>
       </body>
     </html>
   );

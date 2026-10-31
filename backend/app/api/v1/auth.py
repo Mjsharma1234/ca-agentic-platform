@@ -1,0 +1,292 @@
+import uuid
+import logging
+from datetime import datetime, timedelta, timezone
+from typing import Optional, Dict, Any, List
+from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends, HTTPException, status, Request
+from sqlalchemy.orm import Session
+from sqlalchemy import select, or_
+
+from ...core.config import settings
+from ...core.security import create_access_token, get_password_hash
+from ...core.database import get_db
+from ..deps import get_current_user, User as DepUser
+from ...models.tenant import Firm, User, UserRole, AuditBlock
+from ...deterministic_core.otp_service import OTPService
+from ...deterministic_core.audit_chain import compute_block_hash, GENESIS_HASH
+
+logger = logging.getLogger("ca_platform.auth")
+router = APIRouter(prefix="/auth", tags=["Authentication & OTP"])
+
+# -------------------------------------------------------------
+# Pydantic Schemas
+# -------------------------------------------------------------
+class SendOTPRequest(BaseModel):
+    identifier: str = Field(..., description="10-digit Indian Mobile number (+91) or Email address")
+    channel: Optional[str] = Field(None, description="'SMS' or 'EMAIL' (auto-detected if omitted)")
+
+class VerifyOTPRequest(BaseModel):
+    identifier: str = Field(..., description="Phone number or email where OTP was sent")
+    otp: str = Field(..., min_length=4, max_length=8, description="6-digit OTP passcode")
+
+class UserProfileResponse(BaseModel):
+    id: str
+    firm_id: str
+    firm_name: Optional[str] = "Sharma & Associates, Chartered Accountants"
+    email: str
+    phone: Optional[str]
+    full_name: str
+    role: str
+    membership_no: Optional[str] = None
+
+class AuthResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    expires_in_minutes: int = 10080 # 7 days
+    user: UserProfileResponse
+
+# -------------------------------------------------------------
+# Standard Demo Profiles
+# -------------------------------------------------------------
+DEMO_PERSONAS = [
+    {
+        "phone": "+919876543210",
+        "email": "partner@cafirm.in",
+        "full_name": "CA Amit Sharma, FCA",
+        "role": UserRole.PARTNER.value,
+        "membership_no": "ICAI-FCA-504912",
+        "badge": "Managing Partner & Signatory"
+    },
+    {
+        "phone": "+919876543211",
+        "email": "manager@cafirm.in",
+        "full_name": "Neha Gupta, ACA",
+        "role": UserRole.SENIOR_MANAGER.value,
+        "membership_no": "ICAI-ACA-612345",
+        "badge": "Tax & Compliance Lead"
+    },
+    {
+        "phone": "+919876543212",
+        "email": "trainee@cafirm.in",
+        "full_name": "Rohit Verma",
+        "role": UserRole.ARTICLE_TRAINEE.value,
+        "membership_no": None,
+        "badge": "Senior Article Assistant"
+    },
+    {
+        "phone": "+919876543213",
+        "email": "client@rajeshfabrics.com",
+        "full_name": "Rajesh Kumar",
+        "role": UserRole.CLIENT_USER.value,
+        "membership_no": None,
+        "badge": "Client Director (Rajesh Fabrics)"
+    }
+]
+
+# -------------------------------------------------------------
+# Endpoints
+# -------------------------------------------------------------
+@router.post("/otp/send")
+def send_otp(req: SendOTPRequest, db: Session = Depends(get_db)):
+    """Request a 6-digit OTP via Fast2SMS / Twilio (SMS) or Resend / SMTP (Email).
+    In sandbox mode, the OTP is returned in the response and printed to the server logs.
+    """
+    try:
+        result = OTPService.generate_and_send_otp(
+            db=db,
+            identifier=req.identifier,
+            channel=req.channel,
+            purpose="LOGIN"
+        )
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error sending OTP: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to dispatch OTP. Please try again.")
+
+@router.post("/otp/verify", response_model=AuthResponse)
+def verify_otp(req: VerifyOTPRequest, request: Request, db: Session = Depends(get_db)):
+    """Verifies the 6-digit OTP, loads or provisions the user profile, appends an
+    ICAI SQC 1 cryptographic audit block, and issues a signed JWT session token.
+    """
+    try:
+        norm_id, channel = OTPService.normalize_identifier(req.identifier)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+    # Verify candidate OTP
+    is_valid, message = OTPService.verify_otp(db, norm_id, req.otp)
+    if not is_valid:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=message)
+
+    # Find existing user or check predefined personas
+    query = select(User).where(
+        or_(
+            User.email == norm_id,
+            User.phone == norm_id
+        )
+    )
+    user = db.execute(query).scalars().first()
+
+    # If user doesn't exist, check default persona list or create default firm user
+    if not user:
+        matched_persona = next(
+            (p for p in DEMO_PERSONAS if p["phone"] == norm_id or p["email"] == norm_id),
+            None
+        )
+
+        # Get or create default Firm
+        firm = db.execute(select(Firm).limit(1)).scalars().first()
+        if not firm:
+            firm = Firm(
+                id=uuid.UUID("00000000-0000-0000-0000-000000000001"),
+                firm_code="sharma-associates",
+                firm_name="Sharma & Associates, Chartered Accountants",
+                frn="012345S",
+                constitution="PARTNERSHIP",
+                head_office_city="Hyderabad"
+            )
+            db.add(firm)
+            db.flush()
+
+        if matched_persona:
+            user = User(
+                firm_id=firm.id,
+                email=matched_persona["email"],
+                phone=matched_persona["phone"],
+                full_name=matched_persona["full_name"],
+                role=matched_persona["role"],
+                membership_no=matched_persona["membership_no"],
+                hashed_password=get_password_hash("OTP_SECURE_AUTH"),
+                is_active=True,
+                mfa_enabled=True
+            )
+        else:
+            is_email = "@" in norm_id
+            user = User(
+                firm_id=firm.id,
+                email=norm_id if is_email else f"{norm_id.replace('+', '')}@cafirm.in",
+                phone=norm_id if not is_email else "+919876543210",
+                full_name="CA Practitioner" if not is_email else norm_id.split("@")[0].title(),
+                role=UserRole.PARTNER.value,
+                membership_no="ICAI-509123",
+                hashed_password=get_password_hash("OTP_SECURE_AUTH"),
+                is_active=True,
+                mfa_enabled=True
+            )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+    # ICAI SQC-1 Cryptographic Audit Block Logging
+    try:
+        stmt = (
+            select(AuditBlock)
+            .where(AuditBlock.firm_id == user.firm_id)
+            .order_by(AuditBlock.sequence.desc())
+            .limit(1)
+        )
+        last_block = db.execute(stmt).scalar_one_or_none()
+        new_sequence = (last_block.sequence + 1) if last_block else 1
+        prev_hash = last_block.block_hash if last_block else GENESIS_HASH
+
+        now_utc = datetime.now(timezone.utc)
+        iso_now = now_utc.isoformat()
+        payload = {
+            "auth_method": "OTP",
+            "channel": channel,
+            "identifier": norm_id,
+            "client_ip": request.client.host if request.client else "unknown",
+            "user_agent": request.headers.get("user-agent", "unknown")
+        }
+        b_hash = compute_block_hash(
+            sequence=new_sequence,
+            prev_hash=prev_hash,
+            actor_id=str(user.id),
+            actor_role=user.role,
+            action="LOGIN_OTP_VERIFIED",
+            entity_type="USER_SESSION",
+            entity_id=str(user.id),
+            payload=payload,
+            timestamp=iso_now
+        )
+        audit_block = AuditBlock(
+            firm_id=user.firm_id,
+            sequence=new_sequence,
+            prev_hash=prev_hash,
+            block_hash=b_hash,
+            actor_id=str(user.id),
+            actor_role=user.role,
+            action="LOGIN_OTP_VERIFIED",
+            entity_type="USER_SESSION",
+            entity_id=str(user.id),
+            payload_json=payload,
+            timestamp=now_utc
+        )
+        db.add(audit_block)
+        db.commit()
+    except Exception as e:
+        logger.warning(f"Audit block logging non-blocking error: {e}")
+
+    # Generate 7-day JWT access token
+    token_claims = {
+        "sub": str(user.id),
+        "tenant_id": str(user.firm_id),
+        "role": user.role,
+        "email": user.email,
+        "phone": user.phone,
+        "full_name": user.full_name,
+        "membership_no": user.membership_no
+    }
+    token = create_access_token(data=token_claims, expires_delta=timedelta(days=7))
+
+    return AuthResponse(
+        access_token=token,
+        token_type="bearer",
+        expires_in_minutes=7 * 24 * 60,
+        user=UserProfileResponse(
+            id=str(user.id),
+            firm_id=str(user.firm_id),
+            email=user.email,
+            phone=user.phone,
+            full_name=user.full_name,
+            role=user.role,
+            membership_no=user.membership_no
+        )
+    )
+
+@router.get("/me", response_model=UserProfileResponse)
+def get_my_profile(
+    current_user: DepUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Returns the authenticated user's profile decoded from Bearer JWT."""
+    result = db.execute(select(User).where(User.id == current_user.id))
+    user = result.scalars().first()
+
+    if user:
+        return UserProfileResponse(
+            id=str(user.id),
+            firm_id=str(user.firm_id),
+            email=user.email,
+            phone=user.phone,
+            full_name=user.full_name,
+            role=user.role,
+            membership_no=user.membership_no
+        )
+
+    return UserProfileResponse(
+        id=str(current_user.id),
+        firm_id=str(current_user.tenant_id),
+        email=getattr(current_user, "email", "ca.practitioner@cafirm.in"),
+        phone="+919876543210",
+        full_name=getattr(current_user, "full_name", "CA Practitioner"),
+        role=current_user.role,
+        membership_no="ICAI-504912"
+    )
+
+@router.get("/demo-personas", response_model=List[Dict[str, Any]])
+def list_demo_personas():
+    """Provides standard CA firm personas for quick 1-click testing."""
+    return DEMO_PERSONAS

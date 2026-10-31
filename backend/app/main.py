@@ -16,6 +16,7 @@ from .api.v1.clients import router as clients_router
 from .api.v1.firm_os import router as firm_os_router
 from .api.v1.billing import router as billing_router
 from .api.v1.bank_reco import router as bank_reco_router
+from .api.v1.auth import router as auth_router
 
 # Pre-initialize database tables synchronously
 create_tables()
@@ -47,6 +48,7 @@ api_router.include_router(dashboard_router)
 api_router.include_router(clients_router)
 api_router.include_router(billing_router)
 api_router.include_router(bank_reco_router)
+api_router.include_router(auth_router)
 
 @api_router.get("/health")
 async def health_check_v1():

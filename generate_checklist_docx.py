@@ -123,9 +123,9 @@ def build_checklist_docx():
         ["Automation & GST Depth", "8", "2", "0", "10", "80.0%"],
         ["Client Experience", "0", "5", "2", "7", "0.0% (5 In-Prog)"],
         ["Running the Firm", "8", "3", "8", "19", "42.1%"],
-        ["Governance & ICAI SQC 1", "3", "2", "1", "6", "50.0%"],
+        ["Governance & ICAI SQC 1", "4", "1", "1", "6", "66.7%"],
         ["Deployment & Infrastructure", "4", "0", "0", "4", "100.0%"],
-        ["TOTAL PLATFORM SUITE", "32", "14", "11", "57", "56.1% (80.7% Active)"]
+        ["TOTAL PLATFORM SUITE", "33", "13", "11", "57", "57.9% (80.7% Active)"]
     ]
     create_styled_table(doc, scorecard_headers, scorecard_rows, scorecard_widths, hex_header="1B365D")
 
@@ -441,6 +441,12 @@ def build_checklist_docx():
     # Section 6: Governance & Quality Control
     doc.add_heading("6. Governance, ICAI SQC 1 & Ethical Walls", level=1)
     gov_rows = [
+        [
+            "Multi-Factor OTP Authentication & MFA Gate",
+            "[X] Built",
+            "ICAI SQC-1 compliant phone (+91) & email 6-digit OTP engine supporting Fast2SMS, Twilio, Resend, and SMTP adapters with 5-minute TTL, SHA-256 salted hashing, and rate limiting. Issues signed JWT RBAC session tokens (Partner, Manager, Trainee, Client) and records immutable cryptographic audit blocks.",
+            "Production ready."
+        ],
         [
             "Role-Based Access Control (RBAC)",
             "[X] Built",

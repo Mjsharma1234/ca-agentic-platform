@@ -25,13 +25,25 @@ export interface ReconciliationResult {
   };
 }
 
+const getAuthHeaders = (): Record<string, string> => {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (typeof window !== "undefined") {
+    const token = localStorage.getItem("ca_token");
+    if (token) {
+      headers["Authorization"] = `Bearer ${token}`;
+    }
+  }
+  return headers;
+};
+
 export const api = {
   get: async <T = any>(endpoint: string): Promise<{ data: T | null; error: string | null }> => {
     try {
       const url = endpoint.startsWith("http") ? endpoint : `${API_BASE}${endpoint.startsWith("/") ? "" : "/"}${endpoint}`;
-      const res = await fetch(url, { headers: { "Content-Type": "application/json" } });
+      const res = await fetch(url, { headers: getAuthHeaders() });
       if (!res.ok) {
-        throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.detail || `HTTP ${res.status}: ${res.statusText}`);
       }
       const data = await res.json();
       return { data, error: null };
@@ -46,11 +58,12 @@ export const api = {
       const url = endpoint.startsWith("http") ? endpoint : `${API_BASE}${endpoint.startsWith("/") ? "" : "/"}${endpoint}`;
       const res = await fetch(url, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: getAuthHeaders(),
         body: body ? JSON.stringify(body) : undefined,
       });
       if (!res.ok) {
-        throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.detail || `HTTP ${res.status}: ${res.statusText}`);
       }
       const data = await res.json();
       return { data, error: null };
@@ -58,6 +71,53 @@ export const api = {
       console.warn(`API POST ${endpoint} error:`, err.message);
       return { data: null, error: err.message };
     }
+  },
+
+  // Auth & OTP Endpoints
+  sendOtp: async (identifier: string, channel?: string) => {
+    return api.post<{ status: string; channel: string; expires_in_seconds: number; dev_otp?: string }>(
+      "/auth/otp/send",
+      { identifier, channel }
+    );
+  },
+
+  verifyOtp: async (identifier: string, otp: string) => {
+    return api.post<{
+      access_token: string;
+      token_type: string;
+      user: {
+        id: string;
+        firm_id: string;
+        full_name: string;
+        email: string;
+        phone: string;
+        role: string;
+        membership_no?: string;
+      };
+    }>("/auth/otp/verify", { identifier, otp });
+  },
+
+  getMe: async () => {
+    return api.get<{
+      id: string;
+      firm_id: string;
+      full_name: string;
+      email: string;
+      phone: string;
+      role: string;
+      membership_no?: string;
+    }>("/auth/me");
+  },
+
+  getDemoPersonas: async () => {
+    return api.get<Array<{
+      phone: string;
+      email: string;
+      full_name: string;
+      role: string;
+      membership_no: string | null;
+      badge: string;
+    }>>("/auth/demo-personas");
   },
 
   seedDatabase: async () => {

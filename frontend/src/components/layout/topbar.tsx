@@ -1,11 +1,13 @@
 "use client";
 
-import { Bell, Search } from "lucide-react";
-import { usePathname } from "next/navigation";
-import { Badge } from "@/components/ui/badge";
+import { Bell, Search, LogOut } from "lucide-react";
+import { usePathname, useRouter } from "next/navigation";
+import { useAuth } from "@/lib/auth-context";
 
 export function Topbar() {
   const pathname = usePathname();
+  const router = useRouter();
+  const { user, logout } = useAuth();
   
   const getPageTitle = () => {
     if (pathname === '/') return 'Partner Dashboard';
@@ -14,8 +16,35 @@ export function Topbar() {
     if (pathname.startsWith('/documents')) return 'Document Triage & OCR Hub';
     if (pathname.startsWith('/returns')) return 'Returns Assembly & 38 Rules';
     if (pathname.startsWith('/calendar')) return 'Statutory Compliance Calendar';
+    if (pathname.startsWith('/reconciliation')) return 'Bank & Tally Reconciler';
+    if (pathname.startsWith('/billing')) return 'Billing & Invoicing';
     if (pathname.startsWith('/settings')) return 'Platform Settings';
     return 'Platform';
+  };
+
+  const getInitials = (name?: string) => {
+    if (!name) return "CA";
+    const parts = name.replace(/CA\s+/i, "").trim().split(" ");
+    if (parts.length >= 2) {
+      return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
+    }
+    return parts[0].slice(0, 2).toUpperCase();
+  };
+
+  const getRoleBadge = (role?: string) => {
+    switch (role) {
+      case "PARTNER":
+        return <span className="text-[10px] bg-amber-100 text-amber-800 font-bold px-1.5 py-0.5 rounded">Partner</span>;
+      case "SENIOR_MANAGER":
+      case "MANAGER":
+        return <span className="text-[10px] bg-blue-100 text-blue-800 font-bold px-1.5 py-0.5 rounded">Manager</span>;
+      case "ARTICLE_TRAINEE":
+        return <span className="text-[10px] bg-emerald-100 text-emerald-800 font-bold px-1.5 py-0.5 rounded">Article</span>;
+      case "CLIENT_USER":
+        return <span className="text-[10px] bg-purple-100 text-purple-800 font-bold px-1.5 py-0.5 rounded">Client</span>;
+      default:
+        return <span className="text-[10px] bg-slate-100 text-slate-700 font-bold px-1.5 py-0.5 rounded">{role || "User"}</span>;
+    }
   };
 
   return (
@@ -43,14 +72,31 @@ export function Topbar() {
 
         <div className="h-8 w-px bg-slate-200 mx-2"></div>
         
-        <div className="flex items-center space-x-2">
-          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-900 text-sm font-medium text-white">
-            AS
+        <div className="flex items-center space-x-3">
+          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-900 text-xs font-bold text-white shadow-sm">
+            {getInitials(user?.full_name)}
           </div>
           <div className="hidden flex-col md:flex">
-            <span className="text-sm font-medium leading-none">Amit Sharma</span>
-            <span className="text-xs text-slate-500 mt-1">Partner</span>
+            <span className="text-sm font-semibold text-slate-900 leading-none">
+              {user?.full_name || "CA Practitioner"}
+            </span>
+            <div className="mt-1 flex items-center gap-1.5">
+              {getRoleBadge(user?.role)}
+              {user?.membership_no && (
+                <span className="text-[10px] text-slate-500 font-mono">
+                  {user.membership_no}
+                </span>
+              )}
+            </div>
           </div>
+
+          <button
+            onClick={() => logout()}
+            title="Log Out & Switch User"
+            className="ml-2 p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-md transition-colors"
+          >
+            <LogOut className="h-4 w-4" />
+          </button>
         </div>
       </div>
     </header>
