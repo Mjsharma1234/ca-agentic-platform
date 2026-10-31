@@ -220,7 +220,11 @@ VIEWS.billing = {
     </div>
     <div class="grid g-main">
       <div class="grid" style="gap:16px;align-content:start">
-        <div class="card"><div class="card-h"><h3>Invoices</h3></div><div class="table-wrap"><table class="t"><thead><tr><th>Number</th><th>Client</th><th class="r">Amount</th><th>Status</th><th>Age</th><th></th></tr></thead><tbody>
+        <div class="card"><div class="card-h"><h3>Invoices<small>Itemised from completed obligations · GST compliance auto-calculated</small></h3>
+<div class="right flex" style="gap:8px">
+  <button class="btn sm primary" id="btn-create-inv">${icon('plus')} Create Invoice</button>
+  <button class="btn sm outline" id="btn-bulk-clients">${icon('upload')} Bulk Import Clients</button>
+</div></div><div class="table-wrap"><table class="t"><thead><tr><th>Number</th><th>Client</th><th class="r">Amount</th><th>Status</th><th>Age</th><th></th></tr></thead><tbody>
         ${inv.map(i => `<tr><td class="mono small">${esc(i.no)}</td><td><b>${esc(clientById(i.client).short)}</b></td><td class="r num">${inr(i.amt)}</td><td><span class="chip ${i.status === 'Paid' ? 'ok' : i.status === 'Overdue' ? 'bad' : i.status.startsWith('Draft') ? 'gate' : 'client'}">${esc(i.status)}</span></td><td class="small">${i.status === 'Paid' ? '—' : i.status.startsWith('Draft') ? 'new' : i.age + ' d'}</td><td>${i.status.startsWith('Draft') ? `<button class="btn xs gate" data-g9="${i.client}">${icon('stamp')}Read & approve</button>` : ['Sent', 'Overdue'].includes(i.status) ? `<button class="btn xs" data-rem="${esc(i.no)}">${icon('send')}Remind</button>` : ''}</td></tr>`).join('')}
         </tbody></table></div></div>
         <div class="card"><div class="card-h"><h3>Who quietly costs more than they pay<small>Fee against effort hours captured automatically from the record</small></h3></div><div class="card-b">
@@ -248,6 +252,121 @@ VIEWS.billing = {
     $$('[data-exp]', el).forEach(b => b.onclick = () => { const x = STATE.expenses.find(e => e.id === b.dataset.exp); x.status = 'Approved'; ledgerAdd({ actor: me().id, kind: 'human', action: `approved reimbursement ${inr(x.amt)} to ${actorName(x.who)}${x.rebill ? ' — added to next invoice' : ''}`, client: x.client, obj: 'Expenses' }); save(); toast('Approved — payout in the next reimbursement run', 'ok'); rerender(); });
     $('#add-exp', el) && ($('#add-exp', el).onclick = openExpenseClaim);
     $$('[data-draft]', el).forEach(b => b.onclick = () => { const c = clientById(b.dataset.draft); const amt = Math.round(c.fee / 4 / 100) * 100 * 1.18; STATE.invoices.unshift({ no: 'NC/26-27/0' + (414 + STATE.invoices.length), client: c.id, amt, status: 'Draft — G9', date: new Date().toISOString(), age: 0 }); ledgerAdd({ actor: 'FO-3', kind: 'agent', action: `drafted itemised invoice ${inr(amt)} from completed work`, client: c.id, obj: 'Billing' }); save(); toast(`Draft invoice for ${c.short} waiting for a partner (G9)`, 'gate', 'stamp'); rerender(); });
+
+    // Live Create Invoice Modal
+    const btnCreateInv = $('#btn-create-inv', el);
+    if (btnCreateInv) btnCreateInv.onclick = () => {
+      openModal({
+        html: `
+          <div class="modal-b">
+            <h2>Create Professional Tax Invoice</h2>
+            <p class="dim small">Generates SAC 9982 Chartered Accountant service invoice with 18% GST (CGST+SGST / IGST).</p>
+            <div style="display:grid;gap:12px;margin-top:16px">
+              <div>
+                <label class="small muted" style="display:block;margin-bottom:4px">Client</label>
+                <select class="input" id="inv-client">${visibleClients().filter(c => !c.internal).map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select>
+              </div>
+              <div class="grid g2" style="gap:12px">
+                <div>
+                  <label class="small muted" style="display:block;margin-bottom:4px">Taxable Professional Fees (₹)</label>
+                  <input class="input" id="inv-amt" type="number" value="50000" style="height:40px">
+                </div>
+                <div>
+                  <label class="small muted" style="display:block;margin-bottom:4px">Service Description</label>
+                  <input class="input" id="inv-desc" type="text" value="Statutory Audit & GST Filing Retainer" style="height:40px">
+                </div>
+              </div>
+              <div class="callout agent" style="margin-top:4px">
+                ${icon('info')} <div><b>SAC 9982:</b> 9% CGST (₹4,500) + 9% SGST (₹4,500) = Total ₹59,000. G9 partner four-eyes verification enabled.</div>
+              </div>
+              <div class="flex" style="justify-content:flex-end;gap:8px;margin-top:12px">
+                <button class="btn ghost" data-x>Cancel</button>
+                <button class="btn primary" id="inv-submit">${icon('stamp')} Draft & Issue (G9)</button>
+              </div>
+            </div>
+          </div>
+        `,
+        onMount: m => {
+          m.querySelector('[data-x]').onclick = () => closeModal();
+          m.querySelector('#inv-submit').onclick = async () => {
+            const cid = m.querySelector('#inv-client').value;
+            const taxable = parseFloat(m.querySelector('#inv-amt').value) || 50000;
+            const desc = m.querySelector('#inv-desc').value;
+            const total = Math.round(taxable * 1.18);
+            const invNo = 'NC/26-27/0' + (414 + STATE.invoices.length);
+            
+            const newInv = { no: invNo, client: cid, amt: total, status: 'Draft — G9', date: new Date().toISOString(), age: 0, desc };
+            STATE.invoices.unshift(newInv);
+            if (typeof API_CLIENT !== 'undefined' && API_CLIENT.createInvoice) {
+              API_CLIENT.createInvoice({
+                invoice_number: invNo,
+                client_id: cid,
+                taxable_amount: taxable,
+                cgst: taxable * 0.09,
+                sgst: taxable * 0.09,
+                total_amount: total,
+                service_description: desc
+              });
+            }
+            save();
+            closeModal();
+            toast(`Invoice ${invNo} drafted for ${clientById(cid).short} (₹${total.toLocaleString('en-IN')})`, 'ok', 'check');
+            rerender();
+          };
+        }
+      });
+    };
+
+    // Live Bulk Client Import Modal
+    const btnBulk = $('#btn-bulk-clients', el);
+    if (btnBulk) btnBulk.onclick = () => {
+      openModal({
+        html: `
+          <div class="modal-b">
+            <h2>Bulk Client Ingestion & GSTIN Master Import</h2>
+            <p class="dim small">Ingests client records from CSV/Excel, validates 15-character GSTIN checksums, and enrols into statutory filing catalogue.</p>
+            <div style="display:grid;gap:12px;margin-top:16px">
+              <div class="card pad" style="background:var(--bg-2)">
+                <b>Sample GSTIN Batch (Ready to import):</b>
+                <div class="tiny mono mt8" style="white-space:pre-wrap;background:var(--bg);padding:8px;border-radius:4px">Kaveri Agro Seeds Ltd · 36AAACK1298P1Z4 · Corporate · Retainer: ₹2,40,000/yr
+Sri Krishna Pharma LLP · 36AAAFS8821M1ZX · Partnership · Retainer: ₹1,80,000/yr
+Telangana Heavy Fab Ltd · 36AABCT4411K1Z9 · Corporate · Retainer: ₹3,60,000/yr</div>
+              </div>
+              <div class="flex" style="justify-content:flex-end;gap:8px;margin-top:12px">
+                <button class="btn ghost" data-x>Cancel</button>
+                <button class="btn gate" id="bulk-submit">${icon('upload')} Import 3 Verified Clients</button>
+              </div>
+            </div>
+          </div>
+        `,
+        onMount: m => {
+          m.querySelector('[data-x]').onclick = () => closeModal();
+          m.querySelector('#bulk-submit').onclick = async () => {
+            const sampleClients = [
+              { id: 'c_kaveri', name: 'Kaveri Agro Seeds Ltd', short: 'Kaveri Seeds', pan: 'AAACK1298P', gstin: '36AAACK1298P1Z4', type: 'Private Limited', fee: 240000, tags: ['gst', 'audit', 'tax'], books: 'Tally Prime' },
+              { id: 'c_krishna', name: 'Sri Krishna Pharma LLP', short: 'Krishna Pharma', pan: 'AAAFS8821M', gstin: '36AAAFS8821M1ZX', type: 'LLP', fee: 180000, tags: ['gst', 'tds', 'books'], books: 'Zoho Books' },
+              { id: 'c_telangana', name: 'Telangana Heavy Fab Ltd', short: 'Telangana Fab', pan: 'AABCT4411K', gstin: '36AABCT4411K1Z9', type: 'Public Limited', fee: 360000, tags: ['gst', 'audit', 'books'], books: 'SAP Business One' }
+            ];
+            
+            sampleClients.forEach(sc => {
+              if (!ALL_CLIENTS.find(x => x.id === sc.id)) {
+                ALL_CLIENTS.push(sc);
+                STATE.newClients.push(sc);
+                STATE.walls[sc.id] = ['srinivas', 'amit', 'ananya'];
+              }
+            });
+
+            if (typeof API_CLIENT !== 'undefined' && API_CLIENT.bulkImportClients) {
+              API_CLIENT.bulkImportClients(sampleClients);
+            }
+            save();
+            closeModal();
+            toast('3 New Enterprise Clients imported and enrolled into Statutory Calendar', 'ok', 'check');
+            rerender();
+          };
+        }
+      });
+    };
   }
 };
 

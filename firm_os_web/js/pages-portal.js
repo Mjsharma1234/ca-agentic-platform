@@ -448,8 +448,10 @@ VIEWS.login = {
     const u = person(STAFF.user);
     let step = '';
     if (STAFF.step === 'id') {
-      step = `<div class="seg mb16" style="width:100%">${[['email', 'Work email · code'], ['sso', 'Google / Microsoft']].map(([k, n]) => `<button class="${STAFF.method === k ? 'on' : ''}" data-sm="${k}" style="flex:1">${n}</button>`).join('')}</div>` +
-        (STAFF.method === 'email'
+      step = `<div class="seg mb16" style="width:100%">${[['phone', 'Mobile OTP (SMS)'], ['email', 'Work email · code'], ['sso', 'Google / Microsoft']].map(([k, n]) => `<button class="${STAFF.method === k ? 'on' : ''}" data-sm="${k}" style="flex:1">${n}</button>`).join('')}</div>` +
+        (STAFF.method === 'phone'
+          ? `<label class="small" style="font-weight:600;color:var(--ink-2)" for="st-phone">10-Digit Indian Mobile Number (+91)</label><input class="input mt8" id="st-phone" type="tel" placeholder="+91 98765 43210" value="${u ? (u.phone || '+919876543210') : '+919876543210'}" style="height:50px;font-size:16px"><button class="btn primary lg block mt12" id="st-send-phone">Send OTP via SMS ${icon('arrow')}</button>`
+          : STAFF.method === 'email'
           ? `<label class="small" style="font-weight:600;color:var(--ink-2)" for="st-email">Work email</label><input class="input mt8" id="st-email" type="email" autocomplete="username" value="${u ? staffEmail(u) : ''}" style="height:50px;font-size:16px"><button class="btn primary lg block mt12" id="st-send">Send sign-in code ${icon('arrow')}</button>`
           : `<button class="btn lg block" id="st-sso" data-p="Google Workspace">${icon('globe')} Continue with Google Workspace</button><button class="btn lg block mt8" id="st-sso2" data-p="Microsoft 365">${icon('layers')} Continue with Microsoft 365</button><p class="tiny muted mt8">Single sign-on through the firm's own domain. Two-factor is enforced by your identity provider.</p>`);
     } else {
@@ -486,10 +488,21 @@ VIEWS.login = {
     const redraw = () => { el.innerHTML = VIEWS.login.render(); VIEWS.login.mount(el); };
     $$('[data-sm]', el).forEach(b => b.onclick = () => { STAFF.method = b.dataset.sm; redraw(); });
     $('#st-demo', el).onchange = e => { STAFF.user = e.target.value; STAFF.step = 'id'; STAFF.err = ''; redraw(); };
-    const send = $('#st-send', el); if (send) send.onclick = () => {
-      const v = $('#st-email', el).value.trim().toLowerCase(); const p = TEAM.find(t => staffEmail(t) === v);
-      if (!p) { toast('No firm account uses this email. Pick a member of the firm below.', 'bad', 'alert'); $('#st-email', el).classList.add('shake'); return; }
-      STAFF.user = p.id; STAFF.step = 'code'; STAFF.tries = 4; STAFF.err = ''; redraw(); toast(`Code sent to ${staffEmail(p)}`, 'code', 'mail');
+    const send = $('#st-send', el); if (send) send.onclick = async () => {
+      const v = $('#st-email', el).value.trim().toLowerCase(); const p = TEAM.find(t => staffEmail(t) === v) || TEAM[0];
+      STAFF.user = p.id; STAFF.identifier = v; STAFF.step = 'code'; STAFF.tries = 4; STAFF.err = '';
+      if (typeof API_CLIENT !== 'undefined' && API_CLIENT.requestOTP) {
+        API_CLIENT.requestOTP(v, 'EMAIL');
+      }
+      redraw(); toast(`Verification code sent to ${v}`, 'code', 'mail');
+    };
+    const sendPhone = $('#st-send-phone', el); if (sendPhone) sendPhone.onclick = async () => {
+      const phone = $('#st-phone', el).value.trim();
+      STAFF.identifier = phone; STAFF.step = 'code'; STAFF.tries = 4; STAFF.err = '';
+      if (typeof API_CLIENT !== 'undefined' && API_CLIENT.requestOTP) {
+        API_CLIENT.requestOTP(phone, 'SMS');
+      }
+      redraw(); toast(`OTP sent via SMS to ${phone}`, 'ok', 'phone');
     };
     $$('#st-sso, #st-sso2', el).forEach(b => b.onclick = () => staffSignIn(person(STAFF.user), b.dataset.p));
     const otp = $$('#sotp input', el);
@@ -500,8 +513,16 @@ VIEWS.login = {
     });
     if (otp[0]) setTimeout(() => otp[0].focus(), 60);
     const fill = $('#st-fill', el); if (fill) fill.onclick = () => { DEMO_OTP.split('').forEach((c, k) => otp[k].value = c); $('#st-verify', el).click(); };
-    const ver = $('#st-verify', el); if (ver) ver.onclick = () => {
-      if (otp.map(x => x.value).join('') === DEMO_OTP) return staffSignIn(person(STAFF.user), 'email code');
+    const ver = $('#st-verify', el); if (ver) ver.onclick = async () => {
+      const entered = otp.map(x => x.value).join('');
+      if (entered === DEMO_OTP) return staffSignIn(person(STAFF.user), 'demo OTP code');
+      if (typeof API_CLIENT !== 'undefined' && API_CLIENT.verifyOTP) {
+        const res = await API_CLIENT.verifyOTP(STAFF.identifier || staffEmail(person(STAFF.user)), entered);
+        if (res && res.access_token) {
+          toast('OTP Authenticated via FastAPI Backend (JWT issued)', 'ok', 'shield');
+          return staffSignIn(person(STAFF.user), 'live OTP SMS');
+        }
+      }
       STAFF.tries--; STAFF.err = STAFF.tries > 0 ? `That code doesn't match. ${STAFF.tries} ${STAFF.tries === 1 ? 'try' : 'tries'} left.` : 'Too many wrong codes. Ask the managing partner to unlock your account.'; redraw(); $('#sotp', el)?.classList.add('shake');
     };
     const back = $('#st-back', el); if (back) back.onclick = () => { STAFF.step = 'id'; STAFF.err = ''; redraw(); };

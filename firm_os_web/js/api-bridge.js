@@ -290,6 +290,137 @@ const API_CLIENT = {
     return null;
   },
 
+  /* ---------------- AUTH & OTP ---------------- */
+  async requestOTP(identifier, channel = null) {
+    try {
+      const resp = await fetch(${API_BASE}/auth/request-otp, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identifier, channel })
+      });
+      return await resp.json();
+    } catch (e) {
+      console.error('[API-Bridge] requestOTP error:', e);
+      return { status: 'error', detail: e.message };
+    }
+  },
+
+  async verifyOTP(identifier, otp) {
+    try {
+      const resp = await fetch(${API_BASE}/auth/verify-otp, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identifier, otp })
+      });
+      const data = await resp.json();
+      if (resp.ok && data.access_token) {
+        localStorage.setItem('bahi_token', data.access_token);
+        localStorage.setItem('bahi_user', JSON.stringify(data.user));
+        this.token = data.access_token;
+      }
+      return data;
+    } catch (e) {
+      console.error('[API-Bridge] verifyOTP error:', e);
+      return { status: 'error', detail: e.message };
+    }
+  },
+
+  async getMe() {
+    const token = localStorage.getItem('bahi_token') || this.token;
+    if (!token) return null;
+    try {
+      const resp = await fetch(${API_BASE}/auth/me, {
+        headers: { 'Authorization': Bearer  }
+      });
+      if (resp.ok) return await resp.json();
+    } catch (e) {
+      console.warn('[API-Bridge] getMe error:', e);
+    }
+    return null;
+  },
+
+  /* ---------------- BANK RECONCILIATION & TALLY ---------------- */
+  async runBankReconciliation(payload = {}) {
+    try {
+      const resp = await fetch(${API_BASE}/bank-reco/run, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      return await resp.json();
+    } catch (e) {
+      console.error('[API-Bridge] runBankReconciliation error:', e);
+      return { status: 'error', detail: e.message };
+    }
+  },
+
+  async parseBankCSV(csv_content, bank_name = 'AUTO') {
+    try {
+      const resp = await fetch(${API_BASE}/bank-reco/parse, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ csv_content, bank_name })
+      });
+      return await resp.json();
+    } catch (e) {
+      console.error('[API-Bridge] parseBankCSV error:', e);
+      return { status: 'error', detail: e.message };
+    }
+  },
+
+  async parseTallyXML(xml_content, company_name = 'Surya Enterprises Pvt Ltd') {
+    try {
+      const resp = await fetch(${API_BASE}/bank-reco/tally/parse-xml, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ xml_content, company_name })
+      });
+      return await resp.json();
+    } catch (e) {
+      console.error('[API-Bridge] parseTallyXML error:', e);
+      return { status: 'error', detail: e.message };
+    }
+  },
+
+  /* ---------------- BILLING & INVOICING ---------------- */
+  async loadInvoices() {
+    try {
+      const resp = await fetch(${API_BASE}/billing/invoices);
+      if (resp.ok) return await resp.json();
+    } catch (e) {
+      console.warn('[API-Bridge] loadInvoices error:', e);
+    }
+    return [];
+  },
+
+  async createInvoice(invoiceData) {
+    try {
+      const resp = await fetch(${API_BASE}/billing/invoices, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(invoiceData)
+      });
+      return await resp.json();
+    } catch (e) {
+      console.error('[API-Bridge] createInvoice error:', e);
+      return { status: 'error', detail: e.message };
+    }
+  },
+
+  async bulkImportClients(clientsList) {
+    try {
+      const resp = await fetch(${API_BASE}/clients/bulk-import, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clients: clientsList })
+      });
+      return await resp.json();
+    } catch (e) {
+      console.error('[API-Bridge] bulkImportClients error:', e);
+      return { status: 'error', detail: e.message };
+    }
+  },
+
   updateBadge() {
     let badge = document.getElementById('api-status-badge');
     const topbarRight = document.querySelector('.topbar-right');
