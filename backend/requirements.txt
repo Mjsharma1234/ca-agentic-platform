@@ -5,6 +5,7 @@ asyncpg
 aiosqlite
 pydantic>=2.0
 pydantic-settings
+PyJWT>=2.8.0
 python-jose[cryptography]
 passlib[bcrypt]
 python-multipart
@@ -20,3 +21,4 @@ pypdfium2
 pillow
 numpy
 openpyxl
+firebase-admin>=6.5.0

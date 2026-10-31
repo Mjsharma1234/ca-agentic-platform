@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { useAuth, AuthUser } from "@/lib/auth-context";
+import { sendFirebasePhoneOtp, confirmFirebasePhoneOtp } from "@/lib/firebase";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -73,6 +74,23 @@ export default function LoginPage() {
     const formattedId = activeCh === "SMS" && !idToSend.startsWith("+") 
       ? `+91${idToSend.replace(/\D/g, "")}` 
       : idToSend.trim();
+
+    // Check if Firebase Auth is requested for Indian SMS
+    if (activeCh === "SMS" && process.env.NEXT_PUBLIC_FIREBASE_API_KEY) {
+      try {
+        await sendFirebasePhoneOtp(formattedId);
+        setLoading(false);
+        setStep("VERIFY");
+        setCountdown(60);
+        setOtpDigits(["", "", "", "", "", ""]);
+        setSuccessMsg(`Firebase SMS verification code dispatched to ${formattedId}.`);
+        setTimeout(() => inputRefs.current[0]?.focus(), 150);
+        return;
+      } catch (fbErr: any) {
+        console.warn("Firebase Phone Auth fallback to server OTP:", fbErr.message);
+        // Seamless fallback to server multi-provider OTP engine
+      }
+    }
 
     const { data, error } = await api.sendOtp(formattedId, activeCh);
     setLoading(false);
@@ -145,6 +163,26 @@ export default function LoginPage() {
     const formattedId = channel === "SMS" && !identifier.startsWith("+") 
       ? `+91${identifier.replace(/\D/g, "")}` 
       : identifier.trim();
+
+    // Check if confirming via Firebase Phone Auth
+    if (typeof window !== "undefined" && window.confirmationResult) {
+      try {
+        const { idToken } = await confirmFirebasePhoneOtp(fullOtp);
+        const { data, error } = await api.verifyFirebaseToken(idToken);
+        setLoading(false);
+
+        if (error || !data) {
+          setErrorMsg(error || "Firebase session verification failed.");
+          return;
+        }
+
+        setSuccessMsg("Firebase phone verification successful! Launching workspace...");
+        login(data.access_token, data.user as AuthUser);
+        return;
+      } catch (fbErr: any) {
+        console.warn("Firebase confirm error, trying direct verification fallback:", fbErr.message);
+      }
+    }
 
     const { data, error } = await api.verifyOtp(formattedId, fullOtp);
     setLoading(false);
@@ -423,6 +461,9 @@ export default function LoginPage() {
             </div>
           </div>
         </div>
+
+        {/* Invisible reCAPTCHA container for Firebase Phone Auth */}
+        <div id="recaptcha-container"></div>
 
         {/* Compliance Footer */}
         <div className="mt-6 text-center text-xs text-slate-500 flex items-center justify-center gap-2">

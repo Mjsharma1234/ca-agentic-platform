@@ -97,6 +97,22 @@ export const api = {
     }>("/auth/otp/verify", { identifier, otp });
   },
 
+  verifyFirebaseToken: async (idToken: string) => {
+    return api.post<{
+      access_token: string;
+      token_type: string;
+      user: {
+        id: string;
+        firm_id: string;
+        full_name: string;
+        email: string;
+        phone: string;
+        role: string;
+        membership_no?: string;
+      };
+    }>("/auth/firebase/verify", { id_token: idToken });
+  },
+
   getMe: async () => {
     return api.get<{
       id: string;
