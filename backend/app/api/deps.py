@@ -31,7 +31,7 @@ class User:
         self.phone = phone
         self.membership_no = membership_no
 
-async def get_current_user(
+def get_current_user(
     auth: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
     x_user_id: Optional[str] = Header(None),
     x_tenant_id: Optional[str] = Header(None),
@@ -88,7 +88,7 @@ async def get_current_user(
         detail="Authentication required. Please provide a valid Bearer session token."
     )
 
-async def get_current_tenant(current_user: Annotated[User, Depends(get_current_user)]) -> uuid.UUID:
+def get_current_tenant(current_user: Annotated[User, Depends(get_current_user)]) -> uuid.UUID:
     return current_user.tenant_id
 
 ROLE_HIERARCHY = {
@@ -108,7 +108,7 @@ ROLE_HIERARCHY = {
     "MP": 5
 }
 
-async def get_optional_current_user(
+def get_optional_current_user(
     auth: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
     x_user_id: Optional[str] = Header(None),
     x_tenant_id: Optional[str] = Header(None),
@@ -116,7 +116,7 @@ async def get_optional_current_user(
 ) -> Optional[User]:
     """Resolves authenticated user if credentials are provided; returns None otherwise without raising 401."""
     try:
-        return await get_current_user(auth, x_user_id, x_tenant_id, x_user_role)
+        return get_current_user(auth, x_user_id, x_tenant_id, x_user_role)
     except HTTPException:
         return None
 

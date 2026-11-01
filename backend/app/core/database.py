@@ -32,6 +32,9 @@ def create_tables():
     try:
         # Import models so they are registered with Base.metadata
         from .. import models
+        if not settings.auto_create_tables:
+            print("[DB] Auto-create disabled; schema is managed by Alembic (alembic upgrade head).")
+            return
         Base.metadata.create_all(bind=engine)
         print("[DB] All database tables verified / created successfully.")
     except Exception as e:

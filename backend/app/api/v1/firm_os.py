@@ -242,10 +242,12 @@ def execute_dsc_signature(
     """
     is_prod = os.getenv("ENVIRONMENT", "").lower() == "production" or not settings.DEBUG
     user_is_auth = current_user and isinstance(current_user, User)
-    if is_prod and not user_is_auth:
+    if is_prod:
+        # A DSC PIN must never be typed into, or transit through, the platform. Production
+        # signing happens on the partner's desktop signer via /api/v1/signing/requests.
         raise HTTPException(
-            status_code=401,
-            detail="Authentication required. Partner DSC signing ceremony requires an authenticated Partner Bearer token."
+            status_code=410,
+            detail="Server-side DSC signing is disabled. Use the desktop signer (POST /api/v1/signing/requests)."
         )
 
     if user_is_auth:

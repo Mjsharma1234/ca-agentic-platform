@@ -1,5 +1,5 @@
 import uuid
-from sqlalchemy import Column, String, Boolean, Enum, Numeric, ForeignKey
+from sqlalchemy import Column, String, Boolean, Enum, Numeric, ForeignKey, Index, text
 from sqlalchemy.orm import relationship
 import enum
 
@@ -39,6 +39,15 @@ class GSTINStatus(str, enum.Enum):
 
 class Client(BaseModel, SoftDeleteMixin):
     __tablename__ = "clients"
+    __table_args__ = (
+        Index("ix_clients_tenant_active", "tenant_id", "is_deleted"),
+        # One live client per GSTIN per firm; soft-deleted rows may be re-onboarded.
+        Index(
+            "uq_clients_tenant_gstin_live", "tenant_id", "gstin", unique=True,
+            postgresql_where=text("gstin IS NOT NULL AND is_deleted = false"),
+            sqlite_where=text("gstin IS NOT NULL AND is_deleted = 0"),
+        ),
+    )
 
     client_name = Column(String, nullable=False)
     trade_name = Column(String, nullable=True)

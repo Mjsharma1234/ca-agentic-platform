@@ -1,105 +1,177 @@
 import os
+import re
 import uuid
-from typing import Dict, Any, List, Optional
+from datetime import date
+from decimal import Decimal
+from typing import Annotated, Dict, Any, List, Optional
 from dataclasses import asdict
-from fastapi import APIRouter, UploadFile, File, Response, HTTPException
+from fastapi import APIRouter, UploadFile, File, Response, HTTPException, Depends
+from pydantic import BaseModel, Field, field_validator
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from ...core.database import get_db
+from ...deterministic_core.audit_chain import append_audit_block
 from ...deterministic_core.bulk_import import BulkClientImporter
 from ...deterministic_core.task_generator import ProfileTaskGenerator
+from ...models.clients import Client, ClientType, ClientStatus, ERPType, RiskTier
+from ...models.tenant import User as UserModel
+from ..deps import User, require_role
 
 router = APIRouter(prefix="/clients", tags=["clients"])
 
-IN_MEMORY_CLIENTS = [
-    {
-        "id": "c1",
-        "name": "Rajesh Textiles Pvt Ltd",
-        "pan": "AAACR1234F",
-        "gstin": "27AAACR1234F1Z5",
-        "type": "Private Limited",
-        "risk_tier": "Medium",
-        "turnover": 145000000,
-        "is_composition": False,
-        "assigned_partner": "Amit Sharma",
-        "email": "tax@rajeshtextiles.in",
-        "emergency_bypass_active": False
-    },
-    {
-        "id": "c2",
-        "name": "Mumbai Steel Corporation",
-        "pan": "BBBCM5678G",
-        "gstin": "27BBBCM5678G1Z2",
-        "type": "Public Limited",
-        "risk_tier": "High",
-        "turnover": 520000000,
-        "is_composition": False,
-        "assigned_partner": "Priya Patel",
-        "email": "finance@mumbaisteel.com",
-        "emergency_bypass_active": False
-    },
-    {
-        "id": "c3",
-        "name": "Global Tech Solutions LLP",
-        "pan": "CCCGT9012H",
-        "gstin": "29CCCGT9012H1Z8",
-        "type": "LLP",
-        "risk_tier": "Low",
-        "turnover": 89000000,
-        "is_composition": False,
-        "assigned_partner": "Amit Sharma",
-        "email": "compliance@globaltech.io",
-        "emergency_bypass_active": False
-    },
-    {
-        "id": "c4",
-        "name": "Sharma & Sons Logistics",
-        "pan": "DDDSA3456J",
-        "gstin": "07DDDSA3456J1Z1",
-        "type": "Partnership",
-        "risk_tier": "Low",
-        "turnover": 42000000,
-        "is_composition": False,
-        "assigned_partner": "Vikram Singh",
-        "email": "accounts@sharmalogistics.com",
-        "emergency_bypass_active": False
-    },
-    {
-        "id": "c5",
-        "name": "Kerala Spices Export Pvt Ltd",
-        "pan": "EEEKS7890K",
-        "gstin": "32EEEKS7890K1Z4",
-        "type": "Private Limited",
-        "risk_tier": "Medium",
-        "turnover": 210000000,
-        "is_composition": False,
-        "assigned_partner": "Priya Patel",
-        "email": "export@keralaspices.co.in",
-        "emergency_bypass_active": False
-    },
-]
+Viewer = Annotated[User, Depends(require_role("ARTICLE_TRAINEE"))]
+Manager = Annotated[User, Depends(require_role("MANAGER"))]
 
-# Client tasks store: client_id -> list of tasks
+PAN_RE = re.compile(r"^[A-Z]{5}[0-9]{4}[A-Z]$")
+GSTIN_RE = re.compile(r"^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$")
+
+_TYPE_TO_ENUM = {
+    "private limited": ClientType.COMPANY, "public limited": ClientType.COMPANY, "company": ClientType.COMPANY,
+    "llp": ClientType.LLP, "partnership": ClientType.PARTNERSHIP, "individual": ClientType.INDIVIDUAL,
+    "proprietorship": ClientType.INDIVIDUAL, "huf": ClientType.HUF, "trust": ClientType.TRUST,
+}
+_ENUM_LABEL = {
+    ClientType.COMPANY: "Private Limited", ClientType.LLP: "LLP", ClientType.PARTNERSHIP: "Partnership",
+    ClientType.INDIVIDUAL: "Individual", ClientType.HUF: "HUF", ClientType.TRUST: "Trust",
+}
+
+
+def _fy_bounds(today: Optional[date] = None) -> tuple:
+    today = today or date.today()
+    start_year = today.year if today.month >= 4 else today.year - 1
+    return f"{start_year}-04-01", f"{start_year + 1}-03-31"
+
+
+def _partner_names(db: Session, tenant_id: uuid.UUID) -> Dict[uuid.UUID, str]:
+    rows = db.execute(select(UserModel.id, UserModel.full_name).where(UserModel.firm_id == tenant_id)).all()
+    return {r[0]: r[1] for r in rows}
+
+
+def _to_dict(c: Client, partners: Dict[uuid.UUID, str]) -> Dict[str, Any]:
+    meta = c.metadata_ or {}
+    return {
+        "id": str(c.id),
+        "name": c.client_name,
+        "pan": c.pan,
+        "gstin": c.gstin or "",
+        "type": meta.get("entity_label") or _ENUM_LABEL.get(c.client_type, c.client_type.value.title()),
+        "risk_tier": c.risk_tier.value.title(),
+        "turnover": float(c.annual_turnover or 0),
+        "is_composition": bool(c.is_composition),
+        "assigned_partner": partners.get(c.assigned_partner_id) if c.assigned_partner_id else meta.get("assigned_partner_name"),
+        "assigned_partner_id": str(c.assigned_partner_id) if c.assigned_partner_id else None,
+        "email": meta.get("email"),
+        "emergency_bypass_active": bool(c.emergency_bypass_active),
+        "status": c.status.value,
+    }
+
+
+def _get_client(db: Session, client_id: str, tenant_id: uuid.UUID) -> Client:
+    try:
+        cid = uuid.UUID(client_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Client not found.")
+    c = db.execute(
+        select(Client).where(Client.id == cid, Client.tenant_id == tenant_id, Client.is_deleted.is_(False))
+    ).scalar_one_or_none()
+    if c is None:
+        raise HTTPException(status_code=404, detail="Client not found.")
+    return c
+
+
+class ClientIn(BaseModel):
+    name: str = Field(min_length=2, max_length=200)
+    pan: str
+    gstin: Optional[str] = None
+    type: str = "Private Limited"
+    turnover: float = Field(default=0, ge=0, le=1e13)
+    is_composition: bool = False
+    email: Optional[str] = Field(default=None, max_length=150)
+    assigned_partner_id: Optional[uuid.UUID] = None
+
+    @field_validator("pan")
+    @classmethod
+    def _pan(cls, v: str) -> str:
+        v = v.strip().upper()
+        if not PAN_RE.match(v):
+            raise ValueError("PAN must match AAAAA9999A.")
+        return v
+
+    @field_validator("gstin")
+    @classmethod
+    def _gstin(cls, v: Optional[str]) -> Optional[str]:
+        if v is None or not v.strip():
+            return None
+        v = v.strip().upper()
+        if not GSTIN_RE.match(v):
+            raise ValueError("GSTIN format is invalid.")
+        return v
+
+    @field_validator("type")
+    @classmethod
+    def _type(cls, v: str) -> str:
+        if v.strip().lower() not in _TYPE_TO_ENUM:
+            raise ValueError(f"type must be one of {sorted(_TYPE_TO_ENUM)}.")
+        return v.strip()
+
+
+def _apply(c: Client, body: ClientIn, db: Session, tenant_id: uuid.UUID) -> None:
+    if body.gstin and body.gstin[2:12] != body.pan:
+        raise HTTPException(status_code=422, detail="GSTIN characters 3-12 must equal the PAN.")
+    if body.assigned_partner_id is not None:
+        ok = db.execute(
+            select(UserModel.id).where(UserModel.id == body.assigned_partner_id, UserModel.firm_id == tenant_id)
+        ).first()
+        if ok is None:
+            raise HTTPException(status_code=422, detail="assigned_partner_id is not a user of this firm.")
+    meta = dict(c.metadata_ or {})
+    meta["entity_label"] = body.type
+    if body.email:
+        meta["email"] = body.email
+    c.metadata_ = meta
+    c.client_name = body.name.strip()
+    c.pan = body.pan
+    c.gstin = body.gstin
+    c.client_type = _TYPE_TO_ENUM[body.type.lower()]
+    c.annual_turnover = Decimal(str(body.turnover))
+    c.is_composition = body.is_composition
+    c.assigned_partner_id = body.assigned_partner_id
+
+
+# Derived-task cache (statutory tasks are a pure function of the client profile, so this is
+# a cache — never a source of truth — and is rebuilt on demand from the database).
 IN_MEMORY_TASKS: Dict[str, List[Dict[str, Any]]] = {}
 
-# Pre-populate tasks for seed clients
-def _init_seed_tasks():
-    for c in IN_MEMORY_CLIENTS:
-        tasks = ProfileTaskGenerator.generate_tasks_for_client(c)
-        IN_MEMORY_TASKS[c["id"]] = [asdict(t) for t in tasks]
 
-_init_seed_tasks()
+def _tasks_for(c: Client, partners: Dict[uuid.UUID, str]) -> List[Dict[str, Any]]:
+    d = _to_dict(c, partners)
+    tasks = [asdict(t) for t in ProfileTaskGenerator.generate_tasks_for_client(_task_profile(d))]
+    IN_MEMORY_TASKS[d["id"]] = tasks
+    return tasks
+
+
+def _task_profile(d: Dict[str, Any]) -> Dict[str, Any]:
+    return {**d, "assignedPartner": d.get("assigned_partner") or "CA Amit Sharma"}
+
 
 @router.get("/")
-async def list_clients():
-    # Enrich clients with task counts
-    enriched = []
-    for c in IN_MEMORY_CLIENTS:
-        client_copy = dict(c)
-        tasks = IN_MEMORY_TASKS.get(c["id"], [])
-        client_copy["tasks_count"] = len(tasks)
-        enriched.append(client_copy)
-    return enriched
+def list_clients(user: Viewer, db: Session = Depends(get_db)):
+    partners = _partner_names(db, user.tenant_id)
+    rows = db.execute(
+        select(Client).where(Client.tenant_id == user.tenant_id, Client.is_deleted.is_(False)).order_by(Client.client_name)
+    ).scalars().all()
+    out = []
+    for c in rows:
+        d = _to_dict(c, partners)
+        d["tasks_count"] = len(_tasks_for(c, partners))
+        out.append(d)
+    return out
+
 
 @router.get("/import/template")
-async def download_import_template():
+async def download_import_template(user: Viewer):
     """Generates and downloads the official CA Firm OS client import Excel spreadsheet template."""
     content = BulkClientImporter.generate_excel_template()
     return Response(
@@ -112,12 +184,12 @@ MAX_CLIENTS_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
 ALLOWED_CLIENTS_EXTENSIONS = {".xlsx", ".xls", ".csv"}
 
 @router.post("/import-excel")
-async def import_clients_excel(file: UploadFile = File(...)):
+async def import_clients_excel(user: Manager, file: UploadFile = File(...), db: Session = Depends(get_db)):
     """
     Parses and bulk onboards clients from an Excel (.xlsx, .xls) or CSV file.
     Enforces strict file extension and 10MB file size limits to prevent DoS.
-    Validates PAN and GSTIN syntax, checks for duplicates, and automatically
-    generates all statutory compliance tasks for each client.
+    Validates PAN and GSTIN syntax; existing live clients (same PAN + GSTIN) are updated,
+    new ones are created, all inside the caller's tenant.
     """
     filename = file.filename or "clients.xlsx"
     ext = os.path.splitext(filename)[1].lower()
@@ -138,139 +210,189 @@ async def import_clients_excel(file: UploadFile = File(...)):
     if not result.get("success"):
         raise HTTPException(status_code=400, detail=result.get("error", "Failed to parse file."))
 
-    imported_clients = result.get("clients", [])
-    for c in imported_clients:
-        # Check if already present by PAN
-        existing = next((x for x in IN_MEMORY_CLIENTS if x["pan"] == c["pan"]), None)
-        if existing:
-            existing.update(c)
-            cid = existing["id"]
-        else:
-            IN_MEMORY_CLIENTS.insert(0, c)
-            cid = c["id"]
-
-        # Store generated tasks
-        if "generated_tasks" in c:
-            IN_MEMORY_TASKS[cid] = c["generated_tasks"]
-
+    fy_start, fy_end = _fy_bounds()
+    partners = _partner_names(db, user.tenant_id)
+    saved: List[Dict[str, Any]] = []
+    errors = list(result.get("errors", []))
+    for row in result.get("clients", []):
+        try:
+            body = ClientIn(
+                name=row["name"], pan=row["pan"], gstin=row.get("gstin") or None, type=row.get("type") or "Private Limited",
+                turnover=float(row.get("turnover") or 0), is_composition=bool(row.get("is_composition", False)),
+            )
+        except ValueError as exc:
+            errors.append({"client_name": row.get("name", "Unknown"), "issues": [str(exc)]})
+            continue
+        existing = db.execute(
+            select(Client).where(
+                Client.tenant_id == user.tenant_id, Client.is_deleted.is_(False), Client.pan == body.pan,
+                Client.gstin.is_(None) if body.gstin is None else Client.gstin == body.gstin,
+            )
+        ).scalars().first()
+        client = existing or Client(
+            tenant_id=user.tenant_id, status=ClientStatus.ACTIVE, erp_type=ERPType.MANUAL, risk_tier=RiskTier.LOW,
+            financial_year_start=fy_start, financial_year_end=fy_end,
+        )
+        try:
+            _apply(client, body, db, user.tenant_id)
+        except HTTPException as exc:
+            errors.append({"client_name": body.name, "issues": [exc.detail]})
+            continue
+        if existing is None:
+            db.add(client)
+        db.flush()
+        saved.append(_to_dict(client, partners))
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Import conflicts with an existing client GSTIN.")
+    append_audit_block(
+        db, user.tenant_id, str(user.id), user.role, "CLIENTS_IMPORTED", "CLIENT_BATCH", filename,
+        {"imported": len(saved), "failed": len(errors)},
+    )
+    tasks_total = 0
+    for d in saved:
+        c = _get_client(db, d["id"], user.tenant_id)
+        tasks_total += len(_tasks_for(c, partners))
     return {
         "status": "SUCCESS",
         "filename": filename,
         "total_rows_scanned": result.get("total_rows_scanned", 0),
-        "imported_count": len(imported_clients),
-        "failed_count": result.get("failed_count", 0),
-        "tasks_instantiated": result.get("tasks_instantiated", 0),
-        "errors": result.get("errors", []),
-        "clients": imported_clients
+        "imported_count": len(saved),
+        "failed_count": len(errors),
+        "tasks_instantiated": tasks_total,
+        "errors": errors,
+        "clients": saved,
     }
 
 @router.post("/generate-tasks-all")
-async def generate_tasks_all_clients():
-    """Scans all client profiles and automatically regenerates their statutory compliance tasks."""
-    total_tasks = 0
-    for c in IN_MEMORY_CLIENTS:
-        tasks = ProfileTaskGenerator.generate_tasks_for_client(c)
-        IN_MEMORY_TASKS[c["id"]] = [asdict(t) for t in tasks]
-        total_tasks += len(tasks)
-    return {
-        "status": "TASKS_GENERATED_SUCCESSFULLY",
-        "clients_processed": len(IN_MEMORY_CLIENTS),
-        "total_tasks_instantiated": total_tasks
-    }
+def generate_tasks_all_clients(user: Manager, db: Session = Depends(get_db)):
+    """Regenerates statutory compliance tasks for every live client of this firm."""
+    partners = _partner_names(db, user.tenant_id)
+    rows = db.execute(
+        select(Client).where(Client.tenant_id == user.tenant_id, Client.is_deleted.is_(False))
+    ).scalars().all()
+    total = sum(len(_tasks_for(c, partners)) for c in rows)
+    return {"status": "TASKS_GENERATED_SUCCESSFULLY", "clients_processed": len(rows), "total_tasks_instantiated": total}
 
-@router.post("/{client_id}/generate-tasks")
-async def generate_client_tasks(client_id: str):
-    """Automatically creates compliance tasks based on a specific client's profile."""
-    client = await get_client(client_id)
-    tasks = ProfileTaskGenerator.generate_tasks_for_client(client)
-    task_dicts = [asdict(t) for t in tasks]
-    IN_MEMORY_TASKS[client_id] = task_dicts
-    return {
-        "status": "TASKS_GENERATED",
-        "client_id": client_id,
-        "client_name": client.get("name"),
-        "tasks_count": len(tasks),
-        "tasks": task_dicts
-    }
 
 @router.get("/tasks/all")
-async def get_all_practice_tasks():
-    """Returns all statutory compliance tasks across all clients on The Line."""
-    all_tasks = []
-    for cid, tasks in IN_MEMORY_TASKS.items():
-        all_tasks.extend(tasks)
-    return {
-        "total_tasks": len(all_tasks),
-        "tasks": all_tasks
-    }
+def get_all_practice_tasks(user: Viewer, db: Session = Depends(get_db)):
+    """All statutory compliance tasks across this firm's clients."""
+    partners = _partner_names(db, user.tenant_id)
+    rows = db.execute(
+        select(Client).where(Client.tenant_id == user.tenant_id, Client.is_deleted.is_(False))
+    ).scalars().all()
+    all_tasks: List[Dict[str, Any]] = []
+    for c in rows:
+        all_tasks.extend(_tasks_for(c, partners))
+    return {"total_tasks": len(all_tasks), "tasks": all_tasks}
 
-@router.get("/{client_id}/tasks")
-async def get_client_tasks(client_id: str):
-    """Lists all active and scheduled compliance tasks for a specific client."""
-    tasks = IN_MEMORY_TASKS.get(client_id, [])
-    if not tasks:
-        # If not instantiated yet, generate on the fly
-        client = await get_client(client_id)
-        generated = ProfileTaskGenerator.generate_tasks_for_client(client)
-        tasks = [asdict(t) for t in generated]
-        IN_MEMORY_TASKS[client_id] = tasks
-    return {
-        "client_id": client_id,
-        "tasks_count": len(tasks),
-        "tasks": tasks
-    }
 
-@router.post("/")
-async def create_client(client_data: Dict[str, Any]):
-    new_id = f"c{len(IN_MEMORY_CLIENTS) + 1}"
-    new_client = {
-        "id": new_id,
-        "name": client_data.get("name", "New Corporate Client"),
-        "pan": client_data.get("pan", "AAACN9999K"),
-        "gstin": client_data.get("gstin", "27AAACN9999K1Z5"),
-        "type": client_data.get("type", "Private Limited"),
-        "turnover": float(client_data.get("turnover", 50000000)),
-        "is_composition": bool(client_data.get("is_composition", False)),
-        "risk_tier": "Low",
-        "assigned_partner": client_data.get("assigned_partner", "Amit Sharma"),
-        "emergency_bypass_active": False
-    }
-    IN_MEMORY_CLIENTS.insert(0, new_client)
+@router.post("/", status_code=201)
+def create_client(body: ClientIn, user: Manager, db: Session = Depends(get_db)):
+    fy_start, fy_end = _fy_bounds()
+    c = Client(
+        tenant_id=user.tenant_id, status=ClientStatus.ACTIVE, erp_type=ERPType.MANUAL, risk_tier=RiskTier.LOW,
+        financial_year_start=fy_start, financial_year_end=fy_end,
+    )
+    _apply(c, body, db, user.tenant_id)
+    db.add(c)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="A client with this GSTIN already exists in your firm.")
+    db.refresh(c)
+    append_audit_block(
+        db, user.tenant_id, str(user.id), user.role, "CLIENT_CREATED", "CLIENT", str(c.id), {"pan": c.pan},
+    )
+    partners = _partner_names(db, user.tenant_id)
+    d = _to_dict(c, partners)
+    d["tasks_count"] = len(_tasks_for(c, partners))
+    return d
 
-    # Automatically generate statutory tasks for the new client
-    tasks = ProfileTaskGenerator.generate_tasks_for_client(new_client)
-    IN_MEMORY_TASKS[new_id] = [asdict(t) for t in tasks]
-
-    new_client["tasks_count"] = len(tasks)
-    return new_client
 
 @router.get("/{client_id}")
-async def get_client(client_id: str):
-    for c in IN_MEMORY_CLIENTS:
-        if c["id"] == client_id:
-            return c
-    return IN_MEMORY_CLIENTS[0]
+def get_client(client_id: str, user: Viewer, db: Session = Depends(get_db)):
+    return _to_dict(_get_client(db, client_id, user.tenant_id), _partner_names(db, user.tenant_id))
+
 
 @router.put("/{client_id}")
-async def update_client(client_id: str, client_data: Dict[str, Any]):
-    for c in IN_MEMORY_CLIENTS:
-        if c["id"] == client_id:
-            c.update(client_data)
-            # Re-sync tasks if profile changed
-            tasks = ProfileTaskGenerator.generate_tasks_for_client(c)
-            IN_MEMORY_TASKS[client_id] = [asdict(t) for t in tasks]
-            return c
-    return client_data
+def update_client(client_id: str, body: ClientIn, user: Manager, db: Session = Depends(get_db)):
+    c = _get_client(db, client_id, user.tenant_id)
+    _apply(c, body, db, user.tenant_id)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="A client with this GSTIN already exists in your firm.")
+    append_audit_block(
+        db, user.tenant_id, str(user.id), user.role, "CLIENT_UPDATED", "CLIENT", str(c.id), {"pan": c.pan},
+    )
+    partners = _partner_names(db, user.tenant_id)
+    d = _to_dict(c, partners)
+    d["tasks_count"] = len(_tasks_for(c, partners))
+    return d
+
+
+@router.delete("/{client_id}", status_code=204)
+def delete_client(client_id: str, user: Annotated[User, Depends(require_role("PARTNER"))], db: Session = Depends(get_db)):
+    """Soft delete: statutory records must remain recoverable for the retention period."""
+    from datetime import datetime, timezone
+    c = _get_client(db, client_id, user.tenant_id)
+    c.is_deleted = True
+    c.deleted_at = datetime.now(timezone.utc)
+    db.commit()
+    append_audit_block(
+        db, user.tenant_id, str(user.id), user.role, "CLIENT_DELETED", "CLIENT", str(c.id), {"pan": c.pan},
+    )
+
+
+@router.post("/{client_id}/generate-tasks")
+def generate_client_tasks(client_id: str, user: Manager, db: Session = Depends(get_db)):
+    c = _get_client(db, client_id, user.tenant_id)
+    tasks = _tasks_for(c, _partner_names(db, user.tenant_id))
+    return {"status": "TASKS_GENERATED", "client_id": client_id, "client_name": c.client_name, "tasks_count": len(tasks), "tasks": tasks}
+
+
+@router.get("/{client_id}/tasks")
+def get_client_tasks(client_id: str, user: Viewer, db: Session = Depends(get_db)):
+    c = _get_client(db, client_id, user.tenant_id)
+    tasks = _tasks_for(c, _partner_names(db, user.tenant_id))
+    return {"client_id": client_id, "tasks_count": len(tasks), "tasks": tasks}
+
 
 @router.get("/{client_id}/invoices")
-async def get_client_invoices(client_id: str):
-    return [{"id": "INV-101", "client_id": client_id, "invoice_number": "RPL/26-27/08821", "total_value": 531000.00}]
+def get_client_invoices(client_id: str, user: Viewer, db: Session = Depends(get_db)):
+    from ...models.invoices import Invoice
+    c = _get_client(db, client_id, user.tenant_id)
+    rows = db.execute(
+        select(Invoice).where(Invoice.tenant_id == user.tenant_id, Invoice.client_id == c.id, Invoice.is_deleted.is_(False))
+        .order_by(Invoice.invoice_date.desc()).limit(500)
+    ).scalars().all()
+    return [
+        {"id": str(i.id), "client_id": client_id, "invoice_number": i.invoice_number, "invoice_date": i.invoice_date,
+         "supplier_name": i.supplier_name, "total_value": float(i.total_value or 0), "status": i.status.value}
+        for i in rows
+    ]
+
 
 @router.get("/{client_id}/returns")
-async def get_client_returns(client_id: str):
-    return [{"id": "RET-201", "client_id": client_id, "return_type": "GSTR-3B", "period": "2026-10", "status": "REVIEW_PENDING"}]
+def get_client_returns(client_id: str, user: Viewer, db: Session = Depends(get_db)):
+    from ...models.returns import GSTReturn
+    c = _get_client(db, client_id, user.tenant_id)
+    rows = db.execute(
+        select(GSTReturn).where(GSTReturn.tenant_id == user.tenant_id, GSTReturn.client_id == c.id, GSTReturn.is_deleted.is_(False))
+        .order_by(GSTReturn.period.desc())
+    ).scalars().all()
+    return [
+        {"id": str(r.id), "client_id": client_id, "return_type": r.return_type.value, "period": r.period, "status": r.status.value}
+        for r in rows
+    ]
+
 
 @router.get("/{client_id}/obligations")
-async def get_client_obligations(client_id: str):
-    tasks = IN_MEMORY_TASKS.get(client_id, [])
-    return tasks
+def get_client_obligations(client_id: str, user: Viewer, db: Session = Depends(get_db)):
+    return _tasks_for(_get_client(db, client_id, user.tenant_id), _partner_names(db, user.tenant_id))

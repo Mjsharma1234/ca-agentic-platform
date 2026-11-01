@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import Column, String, Boolean, Enum, DateTime, ForeignKey
+from sqlalchemy import Column, String, Boolean, Enum, DateTime, ForeignKey, Index
 import enum
 
 from .base import BaseModel, UUID, JSONB
@@ -24,6 +24,9 @@ class RequiredRole(str, enum.Enum):
 
 class GateDecision(BaseModel):
     __tablename__ = "gate_decisions"
+    __table_args__ = (
+        Index("ix_gate_decisions_tenant_status", "tenant_id", "status"),
+    )
 
     client_id = Column(UUID(as_uuid=True), nullable=False, index=True)
     gate_id = Column(String, nullable=False)

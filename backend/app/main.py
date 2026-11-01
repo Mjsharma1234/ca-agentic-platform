@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 from typing import Optional
 
 from .core.config import settings
+from .api.deps import require_role
 from .core.database import create_tables
 
 from .api.v1.documents import router as documents_router
@@ -18,6 +19,7 @@ from .api.v1.firm_os import router as firm_os_router
 from .api.v1.billing import router as billing_router
 from .api.v1.bank_reco import router as bank_reco_router
 from .api.v1.auth import router as auth_router
+from .api.v1.signing import router as signing_router
 
 # Pre-initialize database tables synchronously
 create_tables()
@@ -68,34 +70,29 @@ api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(firm_os_router)
 api_router.include_router(gates_router)
 api_router.include_router(documents_router)
-api_router.include_router(returns_router)
+api_router.include_router(returns_router, dependencies=[Depends(require_role("ARTICLE_TRAINEE"))])
 api_router.include_router(dashboard_router)
 api_router.include_router(clients_router)
 api_router.include_router(billing_router)
 api_router.include_router(bank_reco_router)
 api_router.include_router(auth_router)
+api_router.include_router(signing_router)
 
 @api_router.get("/health")
 async def health_check_v1():
     return {"status": "ok", "app": settings.APP_NAME, "version": "v1.1-firm-os"}
 
 @api_router.post("/seed")
-async def seed_data(x_admin_key: Optional[str] = Header(None)):
-    """Seed data endpoint — strictly protected against unauthorized invocation."""
+def seed_data(x_admin_key: Optional[str] = Header(None)):
+    """Development seed. Disabled outright in production; there is no key-based bypass."""
     is_prod = os.getenv("ENVIRONMENT", "").lower() == "production" or not settings.DEBUG
     if is_prod:
-        # Require admin key in production
-        if not x_admin_key or x_admin_key != settings.SECRET_KEY:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Database seeding is restricted. Valid admin key required."
-            )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found.")
 
-    from .core.database import AsyncSessionLocal
+    from .core.database import SessionLocal
     from .deterministic_core.seed_data import seed_database
-    async with AsyncSessionLocal() as session:
-        result = await seed_database(session)
-        return result
+    with SessionLocal() as session:
+        return seed_database(session)
 
 app.include_router(api_router)
 

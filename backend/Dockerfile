@@ -36,4 +36,4 @@ COPY . .
 EXPOSE 8080
 
 # Production server execution via Uvicorn supporting Cloud Run $PORT
-CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8080} --workers 2"]
+CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8080} --workers 2"]

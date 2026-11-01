@@ -134,10 +134,11 @@ def verify_otp(req: VerifyOTPRequest, request: Request, db: Session = Depends(ge
 
     # If user doesn't exist, check default persona list or create default firm user
     if not user:
+        # Demo personas carry elevated roles; they are honoured only in local development.
         matched_persona = next(
             (p for p in DEMO_PERSONAS if p["phone"] == norm_id or p["email"] == norm_id),
             None
-        )
+        ) if settings.DEBUG else None
 
         # Get or create default Firm
         firm = db.execute(select(Firm).limit(1)).scalars().first()

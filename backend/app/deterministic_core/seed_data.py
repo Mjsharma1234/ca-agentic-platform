@@ -2,13 +2,16 @@ import uuid
 from typing import Dict, Any
 from datetime import datetime, date, timedelta
 from decimal import Decimal
-from sqlalchemy.ext.asyncio import AsyncSession
+import hashlib
+import json
+from sqlalchemy.orm import Session
 from sqlalchemy import select, delete
 
 from ..models.clients import Client, ClientType, ClientStatus, ERPType, RiskTier
 from ..models.invoices import Invoice, InvoiceDirection, InvoiceSource, IMSStatus, InvoiceStatus
 from ..models.gates import GateDecision, GateStatus, GateTier, RequiredRole
 from ..models.returns import GSTReturn, ReturnType, ReturnStatus
+from ..models.tenant import Firm
 
 TENANT_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 CLIENT_ID = uuid.UUID("11111111-1111-1111-1111-111111111111")
@@ -146,14 +149,23 @@ SAMPLE_GSTR2B_FEEDS = [
     {"supplier_gstin": "9917USA29005OS7", "supplier_name": "Amazon Web Services India", "invoice_number": "AWS-IN-2024-9", "invoice_date": "2024-09-25", "taxable_value": 48000.00, "cgst": 0.00, "sgst": 0.00, "igst": 8640.00}
 ]
 
-async def seed_database(session: AsyncSession) -> Dict[str, Any]:
+def seed_database(session: Session) -> Dict[str, Any]:
     """Clears and seeds the database with a full, realistic CA firm operating dataset."""
     # 1. Clear existing sample data
-    await session.execute(delete(GateDecision).where(GateDecision.client_id == CLIENT_ID))
-    await session.execute(delete(Invoice).where(Invoice.client_id == CLIENT_ID))
-    await session.execute(delete(GSTReturn).where(GSTReturn.client_id == CLIENT_ID))
-    await session.execute(delete(Client).where(Client.id == CLIENT_ID))
-    await session.commit()
+    session.execute(delete(GateDecision).where(GateDecision.client_id == CLIENT_ID))
+    session.execute(delete(Invoice).where(Invoice.client_id == CLIENT_ID))
+    session.execute(delete(GSTReturn).where(GSTReturn.client_id == CLIENT_ID))
+    session.execute(delete(Client).where(Client.id == CLIENT_ID))
+    session.commit()
+
+    # 1b. Ensure the demo firm exists so seeded rows share a tenant with logged-in users
+    if session.get(Firm, TENANT_ID) is None and session.execute(select(Firm).limit(1)).first() is None:
+        session.add(Firm(
+            id=TENANT_ID, firm_code="sharma-associates",
+            firm_name="Sharma & Associates, Chartered Accountants", frn="012345S",
+            constitution="PARTNERSHIP", head_office_city="Hyderabad",
+        ))
+        session.flush()
 
     # 2. Create Client
     client = Client(
@@ -173,7 +185,7 @@ async def seed_database(session: AsyncSession) -> Dict[str, Any]:
         financial_year_end="2025-03-31"
     )
     session.add(client)
-    await session.flush()
+    session.flush()
 
     # 3. Create Invoices
     for b in SAMPLE_PURCHASE_BILLS:
@@ -313,7 +325,7 @@ async def seed_database(session: AsyncSession) -> Dict[str, Any]:
     )
     session.add(gst_return)
 
-    await session.commit()
+    session.commit()
 
     return {
         "status": "success",

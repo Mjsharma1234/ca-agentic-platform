@@ -240,7 +240,7 @@ class BulkClientImporter:
                 "name": name,
                 "client_name": name,
                 "pan": pan,
-                "gstin": gstin or f"27{pan}1Z5", # provide compliant GSTIN if missing
+                "gstin": gstin or "",  # never fabricate a GSTIN; unregistered clients stay blank
                 "type": c_type,
                 "client_type": c_type,
                 "turnover": turnover,
