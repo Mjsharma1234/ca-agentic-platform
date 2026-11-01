@@ -1,9 +1,10 @@
 import os
-from fastapi import FastAPI, Depends, APIRouter
+from fastapi import FastAPI, Depends, APIRouter, Request, HTTPException, status, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from contextlib import asynccontextmanager
+from typing import Optional
 
 from .core.config import settings
 from .core.database import create_tables
@@ -31,11 +32,35 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+# 1. Security Headers Middleware
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response: Response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "SAMEORIGIN"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    return response
+
+# 2. Strict CORS Configuration
+TRUSTED_ORIGINS = [
+    "https://firmosweb.vercel.app",
+    "https://ca-agentic-platform.vercel.app",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+]
+if settings.CORS_ORIGINS and settings.CORS_ORIGINS != ["*"]:
+    for o in settings.CORS_ORIGINS:
+        if o not in TRUSTED_ORIGINS:
+            TRUSTED_ORIGINS.append(o)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"] if settings.DEBUG else settings.CORS_ORIGINS,
-    allow_credentials=True,
-    allow_methods=["*"],
+    allow_origins=TRUSTED_ORIGINS if not settings.DEBUG else ["*"],
+    allow_credentials=True if not settings.DEBUG else False,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -55,7 +80,17 @@ async def health_check_v1():
     return {"status": "ok", "app": settings.APP_NAME, "version": "v1.1-firm-os"}
 
 @api_router.post("/seed")
-async def seed_data():
+async def seed_data(x_admin_key: Optional[str] = Header(None)):
+    """Seed data endpoint — strictly protected against unauthorized invocation."""
+    is_prod = os.getenv("ENVIRONMENT", "").lower() == "production" or not settings.DEBUG
+    if is_prod:
+        # Require admin key in production
+        if not x_admin_key or x_admin_key != settings.SECRET_KEY:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Database seeding is restricted. Valid admin key required."
+            )
+
     from .core.database import AsyncSessionLocal
     from .deterministic_core.seed_data import seed_database
     async with AsyncSessionLocal() as session:

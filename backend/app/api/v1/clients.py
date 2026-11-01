@@ -1,3 +1,4 @@
+import os
 import uuid
 from typing import Dict, Any, List, Optional
 from dataclasses import asdict
@@ -107,15 +108,31 @@ async def download_import_template():
         headers={"Content-Disposition": "attachment; filename=CA_Firm_OS_Client_Import_Template.xlsx"}
     )
 
+MAX_CLIENTS_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
+ALLOWED_CLIENTS_EXTENSIONS = {".xlsx", ".xls", ".csv"}
+
 @router.post("/import-excel")
 async def import_clients_excel(file: UploadFile = File(...)):
     """
-    Parses and bulk onboards clients from an Excel (.xlsx) or CSV file.
+    Parses and bulk onboards clients from an Excel (.xlsx, .xls) or CSV file.
+    Enforces strict file extension and 10MB file size limits to prevent DoS.
     Validates PAN and GSTIN syntax, checks for duplicates, and automatically
     generates all statutory compliance tasks for each client.
     """
-    contents = await file.read()
     filename = file.filename or "clients.xlsx"
+    ext = os.path.splitext(filename)[1].lower()
+    if ext not in ALLOWED_CLIENTS_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid file type '{ext}'. Only Excel (.xlsx, .xls) and CSV (.csv) files are permitted for client onboarding."
+        )
+
+    contents = await file.read()
+    if len(contents) > MAX_CLIENTS_FILE_SIZE:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File exceeds maximum upload size limit of {MAX_CLIENTS_FILE_SIZE // (1024 * 1024)} MB."
+        )
 
     result = BulkClientImporter.parse_file(contents, filename)
     if not result.get("success"):

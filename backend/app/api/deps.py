@@ -1,3 +1,4 @@
+import os
 from typing import Generator, Annotated, Optional
 from fastapi import Depends, HTTPException, status, Header, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -36,16 +37,21 @@ async def get_current_user(
     x_tenant_id: Optional[str] = Header(None),
     x_user_role: Optional[str] = Header(None),
 ) -> User:
-    """Resolves current user from Bearer JWT token if present, otherwise falls back
-    to test headers for backward-compatibility with existing automated suites.
+    """Resolves authenticated user from Bearer JWT token.
+    Enforces strict signature & expiration verification.
+    Fallback test headers are strictly gated behind pytest / explicit test mode flags.
     """
-    # 1. Bearer JWT Authentication
+    # 1. Bearer JWT Authentication (Standard Production Path)
     if auth and auth.credentials:
         try:
             payload = jwt.decode(auth.credentials, settings.SECRET_KEY, algorithms=[ALGORITHM])
-            user_id = payload.get("sub", "00000000-0000-0000-0000-000000000002")
-            tenant_id = payload.get("tenant_id", "00000000-0000-0000-0000-000000000001")
-            role = payload.get("role", "PARTNER")
+            user_id = payload.get("sub")
+            tenant_id = payload.get("tenant_id")
+            role = payload.get("role")
+            
+            if not user_id or not tenant_id or not role:
+                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token claims.")
+
             email = payload.get("email", "")
             full_name = payload.get("full_name", "")
             phone = payload.get("phone", None)
@@ -65,24 +71,54 @@ async def get_current_user(
         except jwt.PyJWTError:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid session token.")
 
-    # 2. Backward-compatible fallback headers (for testing)
-    uid = x_user_id or "00000000-0000-0000-0000-000000000002"
-    tid = x_tenant_id or "00000000-0000-0000-0000-000000000001"
-    role = x_user_role or "PARTNER"
-    return User(id=uid, tenant_id=tid, role=role, email="partner@cafirm.in", full_name="CA Amit Sharma")
+    # 2. Test Environment Compatibility (Gated strictly to test suites)
+    is_test_env = (
+        bool(os.getenv("PYTEST_CURRENT_TEST")) or
+        os.getenv("ALLOW_TEST_AUTH_HEADERS", "").lower() in ("true", "1")
+    )
+    if is_test_env and (x_user_id or x_tenant_id or x_user_role):
+        uid = x_user_id or "00000000-0000-0000-0000-000000000002"
+        tid = x_tenant_id or "00000000-0000-0000-0000-000000000001"
+        role = x_user_role or "ARTICLE_TRAINEE"
+        return User(id=uid, tenant_id=tid, role=role, email="test.user@cafirm.in", full_name="Automated Test Subject")
+
+    # 3. Reject Unauthenticated Requests
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Authentication required. Please provide a valid Bearer session token."
+    )
 
 async def get_current_tenant(current_user: Annotated[User, Depends(get_current_user)]) -> uuid.UUID:
     return current_user.tenant_id
 
 ROLE_HIERARCHY = {
     "CLIENT_USER": 0,
+    "CLIENT": 0,
     "ARTICLE_TRAINEE": 1,
+    "AT": 1,
     "STAFF": 1,
     "REVIEWER": 2,
+    "SA": 2,
     "MANAGER": 3,
+    "MG": 3,
     "SENIOR_MANAGER": 4,
-    "PARTNER": 5
+    "SM": 4,
+    "PARTNER": 5,
+    "PT": 5,
+    "MP": 5
 }
+
+async def get_optional_current_user(
+    auth: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+    x_user_id: Optional[str] = Header(None),
+    x_tenant_id: Optional[str] = Header(None),
+    x_user_role: Optional[str] = Header(None),
+) -> Optional[User]:
+    """Resolves authenticated user if credentials are provided; returns None otherwise without raising 401."""
+    try:
+        return await get_current_user(auth, x_user_id, x_tenant_id, x_user_role)
+    except HTTPException:
+        return None
 
 def require_role(required_role: str):
     """Enforces Role-Based Access Control (RBAC) hierarchy."""

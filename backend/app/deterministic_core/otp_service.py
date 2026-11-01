@@ -1,4 +1,6 @@
+import os
 import re
+import hmac
 import secrets
 import hashlib
 import logging
@@ -123,8 +125,9 @@ class OTPService:
             "expires_in_seconds": settings.OTP_EXPIRE_MINUTES * 60,
         }
 
-        # Include dev_otp in response when in debug or sandbox mode for zero-friction local testing
-        if settings.DEBUG or settings.OTP_SANDBOX_MODE or dispatch_status.get("sandbox"):
+        # Include dev_otp in response ONLY when explicitly in non-production debug/sandbox mode
+        is_prod = os.getenv("ENVIRONMENT", "").lower() == "production" or not settings.DEBUG
+        if not is_prod and (settings.OTP_SANDBOX_MODE or dispatch_status.get("sandbox")):
             resp["dev_otp"] = plain_otp
 
         return resp
@@ -164,7 +167,8 @@ class OTPService:
         record.attempts += 1
         expected_hash = cls.hash_otp(norm_id, clean_otp)
 
-        if record.otp_hash != expected_hash:
+        # Constant-time comparison to prevent timing attacks
+        if not hmac.compare_digest(record.otp_hash, expected_hash):
             remaining = record.max_attempts - record.attempts
             db.commit()
             if remaining <= 0:

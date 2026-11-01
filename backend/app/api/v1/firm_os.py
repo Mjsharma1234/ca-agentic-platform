@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 import re
 import uuid
 from datetime import datetime, date
@@ -9,7 +10,9 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from sqlalchemy import select, update
 
+from ...core.config import settings
 from ...core.database import get_db
+from ...api.deps import get_optional_current_user, User, ROLE_HIERARCHY
 from ...models.firm_os import FirmStateModel, ObligationItem, NoticeItem, DaybookEntry, GateApprovalLog
 from ...models.audit_ledger import AuditLedger, ActionType
 from ...deterministic_core.reconciler import reconcile_books_with_gstr2b
@@ -113,7 +116,8 @@ def sync_firm_state(req: StateSyncRequest, db: Session = Depends(get_db)):
 def decide_gate(
     gate_code: str,
     req: GateDecisionRequest,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_optional_current_user)
 ):
     """
     Production Gate Decision Engine enforcing:
@@ -121,12 +125,18 @@ def decide_gate(
     2. Four-eyes principle (preparer != reviewer)
     3. Transaction value limits (> ₹50,000 partner rule)
     4. Cryptographic SHA-256 audit logging
+    5. Identity binding to authenticated user session when available
     """
-    role = req.actor_role.upper()
+    if current_user and isinstance(current_user, User):
+        actor_id = str(current_user.id)
+        role = current_user.role.upper()
+    else:
+        actor_id = req.actor_id
+        role = req.actor_role.upper()
     
     # Four-Eyes invariant check (SQC 1)
     if gate_code == "G6" or req.preparer_id:
-        if req.preparer_id and req.preparer_id == req.actor_id:
+        if req.preparer_id and req.preparer_id == actor_id:
             raise HTTPException(
                 status_code=400,
                 detail=f"Four-Eyes Invariant Violation: Preparer ({req.preparer_id}) cannot review their own filing at {gate_code}."
@@ -134,14 +144,16 @@ def decide_gate(
             
     # Partner-only gates check
     partner_gates = {"G7", "G8", "G9", "G11", "G13", "G14", "G15", "G16", "G18"}
-    if gate_code in partner_gates and role not in ["MP", "PT"]:
+    role_level = ROLE_HIERARCHY.get(role, 0)
+    is_partner = role in ["MP", "PT", "PARTNER"] or role_level >= ROLE_HIERARCHY["PARTNER"]
+    if gate_code in partner_gates and not is_partner:
         raise HTTPException(
             status_code=403,
             detail=f"Statutory Boundary Violation: Gate {gate_code} requires Partner authorization. Current role: {role}."
         )
         
     # High-value transaction threshold
-    if req.amount and req.amount > 50000 and gate_code in ["G3", "G4"] and role not in ["MP", "PT"]:
+    if req.amount and req.amount > 50000 and gate_code in ["G3", "G4"] and not is_partner:
         raise HTTPException(
             status_code=403,
             detail=f"Value Threshold Exceeded: Transactions above ₹50,000 at {gate_code} require Partner review. (Amount: ₹{req.amount:,.2f})"
@@ -151,8 +163,8 @@ def decide_gate(
         "gate_code": gate_code,
         "item_id": req.item_id,
         "action": req.action,
-        "actor_id": req.actor_id,
-        "actor_role": req.actor_role,
+        "actor_id": actor_id,
+        "actor_role": role,
         "notes": req.notes,
         "decided_at": datetime.utcnow().isoformat()
     }
@@ -165,7 +177,7 @@ def decide_gate(
         item_id=req.item_id,
         client_id="c01",
         action=req.action.upper(),
-        decided_by=req.actor_id,
+        decided_by=actor_id,
         actor_role=role,
         decision_notes=req.notes,
         four_eyes_verified=True,
@@ -220,12 +232,34 @@ def decide_gate(
 @router.post("/dsc/sign")
 def execute_dsc_signature(
     req: DSCSigningRequest,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_optional_current_user)
 ):
     """
     Gate G7: Partner Class-3 DSC USB Token Signing Ceremony.
     Simulates hardware cryptographic signature token generation with immediate memory wipe of PIN.
+    Enforces CA Partner privilege check and audit validation.
     """
+    is_prod = os.getenv("ENVIRONMENT", "").lower() == "production" or not settings.DEBUG
+    user_is_auth = current_user and isinstance(current_user, User)
+    if is_prod and not user_is_auth:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required. Partner DSC signing ceremony requires an authenticated Partner Bearer token."
+        )
+
+    if user_is_auth:
+        user_role = (current_user.role or "").upper()
+        role_level = ROLE_HIERARCHY.get(user_role, 0)
+        if user_role not in ["PARTNER", "PT", "MP"] and role_level < ROLE_HIERARCHY["PARTNER"]:
+            raise HTTPException(
+                status_code=403,
+                detail=f"DSC signing ceremony strictly restricted to Chartered Accountant Partners. Your role: {current_user.role}"
+            )
+        signer_id = str(current_user.id)
+    else:
+        signer_id = req.partner_id
+
     if len(req.pin) < 6:
         raise HTTPException(status_code=400, detail="Invalid DSC PIN: Must be at least 6 alphanumeric characters.")
         
@@ -233,7 +267,7 @@ def execute_dsc_signature(
     
     # Generate PKCS#7 detached signature simulation
     signature_payload = {
-        "signer": req.partner_id,
+        "signer": signer_id,
         "cert_serial": "IN-CC3-2026-9812-CA",
         "issuer": "eMudhra Sub-CA Class 3",
         "signed_hash": doc_hash,

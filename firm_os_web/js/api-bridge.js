@@ -12,6 +12,17 @@ const API_CLIENT = {
   lastSyncTime: null,
   syncTimer: null,
 
+  token: null,
+
+  getHeaders(customHeaders = {}) {
+    const token = localStorage.getItem('bahi_token') || this.token;
+    const headers = { 'Content-Type': 'application/json', ...customHeaders };
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    return headers;
+  },
+
   async checkHealth() {
     try {
       const resp = await fetch(`${API_BASE}/health`, { method: 'GET' });
@@ -62,7 +73,7 @@ const API_CLIENT = {
       try {
         const resp = await fetch(`${API_BASE}/firm-os/state/sync`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: this.getHeaders(),
           body: JSON.stringify({
             state: state,
             synced_by: (typeof me === 'function' && me()) ? me().id : 'system'
@@ -104,7 +115,7 @@ const API_CLIENT = {
     try {
       const resp = await fetch(`${API_BASE}/firm-os/gates/${gateCode}/decide`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: this.getHeaders(),
         body: JSON.stringify(payload)
       });
 
@@ -132,7 +143,7 @@ const API_CLIENT = {
 
     const resp = await fetch(`${API_BASE}/firm-os/dsc/sign`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: this.getHeaders(),
       body: JSON.stringify(payload)
     });
 
@@ -146,7 +157,7 @@ const API_CLIENT = {
   async runReconciliation(clientId = 'c01', period = '2026-09') {
     const resp = await fetch(`${API_BASE}/firm-os/reconciliation/run`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: this.getHeaders(),
       body: JSON.stringify({ client_id: clientId, period: period })
     });
 
@@ -185,7 +196,7 @@ const API_CLIENT = {
   async generateGSTR1(supplierGstin, period, invoices = null) {
     const resp = await fetch(`${API_BASE}/firm-os/filings/gstr1/generate`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: this.getHeaders(),
       body: JSON.stringify({ supplier_gstin: supplierGstin, return_period: period, invoices: invoices })
     });
     if (!resp.ok) throw new Error('GSTR-1 JSON Generation failed');
@@ -195,7 +206,7 @@ const API_CLIENT = {
   async computeGSTR3B(payload) {
     const resp = await fetch(`${API_BASE}/firm-os/filings/gstr3b/compute`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: this.getHeaders(),
       body: JSON.stringify(payload)
     });
     if (!resp.ok) throw new Error('GSTR-3B Computation failed');
@@ -206,7 +217,7 @@ const API_CLIENT = {
     const actor = (typeof me === 'function' && me()) ? me() : { id: 'srinivas', role: 'PT' };
     const resp = await fetch(`${API_BASE}/firm-os/filings/submit`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: this.getHeaders(),
       body: JSON.stringify({
         return_type: returnType,
         gstin: gstin,
@@ -228,7 +239,7 @@ const API_CLIENT = {
     const actor = (typeof me === 'function' && me()) ? me() : { id: 'srinivas', role: 'PT' };
     const resp = await fetch(`${API_BASE}/firm-os/team/members`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: this.getHeaders(),
       body: JSON.stringify({
         ...payload,
         partner_id: actor.id,
@@ -255,7 +266,7 @@ const API_CLIENT = {
   async syncPortalLive(gstins = null) {
     const resp = await fetch(`${API_BASE}/firm-os/portal/sync-live`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: this.getHeaders(),
       body: JSON.stringify({ period: '2026-09', gstins: gstins })
     });
     if (!resp.ok) throw new Error('Portal sync failed');
@@ -295,7 +306,7 @@ const API_CLIENT = {
     try {
       const resp = await fetch(${API_BASE}/auth/request-otp, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: this.getHeaders(),
         body: JSON.stringify({ identifier, channel })
       });
       return await resp.json();
@@ -309,7 +320,7 @@ const API_CLIENT = {
     try {
       const resp = await fetch(${API_BASE}/auth/verify-otp, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: this.getHeaders(),
         body: JSON.stringify({ identifier, otp })
       });
       const data = await resp.json();
@@ -344,7 +355,7 @@ const API_CLIENT = {
     try {
       const resp = await fetch(${API_BASE}/bank-reco/run, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: this.getHeaders(),
         body: JSON.stringify(payload)
       });
       return await resp.json();
@@ -358,7 +369,7 @@ const API_CLIENT = {
     try {
       const resp = await fetch(${API_BASE}/bank-reco/parse, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: this.getHeaders(),
         body: JSON.stringify({ csv_content, bank_name })
       });
       return await resp.json();
@@ -372,7 +383,7 @@ const API_CLIENT = {
     try {
       const resp = await fetch(${API_BASE}/bank-reco/tally/parse-xml, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: this.getHeaders(),
         body: JSON.stringify({ xml_content, company_name })
       });
       return await resp.json();
@@ -397,7 +408,7 @@ const API_CLIENT = {
     try {
       const resp = await fetch(${API_BASE}/billing/invoices, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: this.getHeaders(),
         body: JSON.stringify(invoiceData)
       });
       return await resp.json();
@@ -411,7 +422,7 @@ const API_CLIENT = {
     try {
       const resp = await fetch(${API_BASE}/clients/bulk-import, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: this.getHeaders(),
         body: JSON.stringify({ clients: clientsList })
       });
       return await resp.json();

@@ -1,10 +1,15 @@
-from fastapi import APIRouter, UploadFile, File, Form
+import os
+import re
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, status, Depends
 from typing import Optional
 import uuid
 from datetime import datetime
 from ...deterministic_core.ocr_engine import extract_text_and_fields
 
 router = APIRouter(prefix="/documents", tags=["documents"])
+
+MAX_FILE_SIZE = 25 * 1024 * 1024  # 25 Megabytes
+ALLOWED_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg", ".tiff", ".bmp"}
 
 IN_MEMORY_DOCS = [
     {
@@ -54,24 +59,41 @@ async def upload_document(
     client_id: Optional[str] = Form(default="c1"),
     file: UploadFile = File(...)
 ):
+    # 1. Filename sanitization & path traversal mitigation
+    raw_filename = file.filename or "uploaded_doc.pdf"
+    safe_basename = os.path.basename(raw_filename)
+    safe_filename = re.sub(r"[^a-zA-Z0-9_.\-]", "_", safe_basename)
+    _, ext = os.path.splitext(safe_filename.lower())
+
+    if ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported file format '{ext}'. Allowed formats: {', '.join(sorted(ALLOWED_EXTENSIONS))}"
+        )
+
+    # 2. File size enforcement (DoS mitigation)
     contents = await file.read()
-    filename = file.filename or "uploaded_doc.pdf"
-    
-    # Run the live OCR & extraction engine
-    parsed = extract_text_and_fields(contents, filename)
+    if len(contents) > MAX_FILE_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"File exceeds maximum size limit of 25 MB (Received {len(contents) / (1024*1024):.1f} MB)."
+        )
+
+    # 3. Run live OCR & extraction engine
+    parsed = extract_text_and_fields(contents, safe_filename)
     
     doc_id = f"DOC-{str(uuid.uuid4())[:6].upper()}"
-    status = "VERIFIED" if parsed["confidence"] >= 0.95 else "NEEDS_REVIEW"
+    doc_status = "VERIFIED" if parsed["confidence"] >= 0.95 else "NEEDS_REVIEW"
     
     new_doc = {
         "id": doc_id,
-        "file_name": filename,
+        "file_name": safe_filename,
         "client": client_id,
         "doc_type": parsed["doc_type"],
         "invoice_number": parsed["invoice_number"],
         "invoice_date": parsed["invoice_date"],
         "supplier_gstin": parsed["primary_gstin"],
-        "supplier_name": filename.rsplit(".", 1)[0].replace("_", " ").title(),
+        "supplier_name": safe_filename.rsplit(".", 1)[0].replace("_", " ").title(),
         "pan": parsed["primary_pan"],
         "taxable_value": parsed["taxable_value"],
         "igst": parsed["igst"],
@@ -79,7 +101,7 @@ async def upload_document(
         "sgst": 0.00,
         "total_value": parsed["total_value"],
         "extraction_confidence": parsed["confidence"],
-        "status": status,
+        "status": doc_status,
         "engine": parsed["engine"],
         "raw_text_snippet": parsed["raw_text_snippet"],
         "source": "PORTAL_UPLOAD"
