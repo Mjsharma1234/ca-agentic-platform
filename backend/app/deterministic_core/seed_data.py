@@ -323,6 +323,15 @@ def seed_database(session: Session) -> Dict[str, Any]:
         net_tax_payable=Decimal("63390.00"),
         due_date=date(2024, 10, 20)
     )
+    return_payload = {
+        "return_type": "GSTR3B", "gstin": CLIENT_GSTIN, "period": "092024",
+        "total_taxable_outward": "525000.00", "total_tax_liability": "94500.00",
+        "total_itc_claimed": "31110.00", "net_tax_payable": "63390.00",
+    }
+    gst_return.payload_json = return_payload
+    gst_return.payload_hash = hashlib.sha256(
+        json.dumps(return_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
     session.add(gst_return)
 
     session.commit()

@@ -235,6 +235,19 @@ def test_full_signing_flow_updates_return_and_audit_chain(env):
     assert replay.status_code == 409  # single use
 
 
+def test_prepare_returns_server_held_hash_and_eligible_partners(env):
+    reviewed(env)
+    q = f"/api/v1/signing/prepare?entity_type=GST_RETURN&entity_id={env['ret'].id}"
+    assert env["http"].get(q, headers=token(env["users"]["preparer"])).status_code == 403
+    res = env["http"].get(q, headers=token(env["users"]["manager"]))
+    assert res.status_code == 200
+    body = res.json()
+    assert body["document_hash"] == env["ret"].payload_hash
+    assert {s["id"] for s in body["eligible_signers"]} == {str(env["users"]["partner"].id), str(env["users"]["partner2"].id)}
+    other = token(env["users"]["other_partner"])
+    assert env["http"].get(q, headers=other).status_code == 404
+
+
 def test_request_creation_guards(env):
     reviewed(env)
     partner, manager = env["users"]["partner"], env["users"]["manager"]
@@ -374,6 +387,21 @@ def test_dashboard_is_computed_from_database(env):
     assert ov["clients_count"] == 1 and ov["pending_gates"] == 2 and ov["returns_status"] == {"filed": 0, "pending": 1}
     tracker = env["http"].get("/api/v1/dashboard/filing-tracker", headers=hdr).json()
     assert tracker == {"completed": 0, "in_progress": 1, "not_started": 0}
+
+
+def test_audit_chain_stays_valid_across_logins_and_actions(env):
+    """Regression: login blocks used a different timestamp format and made the chain verify as tampered."""
+    manager = env["users"]["manager"]
+    for _ in range(2):
+        sent = env["http"].post("/api/v1/auth/otp/send", json={"identifier": manager.email, "channel": "EMAIL"})
+        assert sent.status_code == 200, sent.text
+        otp = sent.json().get("dev_otp")
+        assert otp, "sandbox OTP expected in test configuration"
+        ok = env["http"].post("/api/v1/auth/otp/verify", json={"identifier": manager.email, "otp": otp})
+        assert ok.status_code == 200, ok.text
+    env["http"].post(f"/api/v1/gates/{env['g6'].id}/escalate", json={"notes": "needs partner view"}, headers=token(manager))
+    result = verify_firm_audit_chain(env["db"], FIRM_A)
+    assert result["chain_valid"] is True and result["total_blocks"] >= 3, result
 
 
 # ----------------------------------------------------------------------------- production posture

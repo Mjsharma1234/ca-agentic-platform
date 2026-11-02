@@ -1,7 +1,6 @@
 "use client";
 
-import { useState } from "react";
-import { demoClients } from "@/lib/demo-data";
+import { useState, useEffect, useCallback } from "react";
 import { formatIndianCurrency } from "@/lib/utils";
 import { api, ReconciliationResult } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -10,7 +9,6 @@ import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import {
   Briefcase,
-  Plus,
   CheckCircle2,
   Clock,
   ShieldCheck,
@@ -19,7 +17,6 @@ import {
   Download,
   FileCheck,
   AlertTriangle,
-  Database,
   ArrowRight
 } from "lucide-react";
 import Link from "next/link";
@@ -28,7 +25,7 @@ interface ReturnItem {
   id: string;
   client: string;
   gstin: string;
-  type: "GSTR-1" | "GSTR-3B" | "GSTR-1A";
+  type: string;
   period: string;
   taxableLiability: number;
   itcClaimed: number;
@@ -36,194 +33,71 @@ interface ReturnItem {
   stage: string;
   progress: number;
   rulesPassed: string;
-  gateLink: string;
 }
 
-const initialReturns: ReturnItem[] = [
-  {
-    id: "RET-201",
-    client: "Rajesh Fabrics Pvt Ltd",
-    gstin: "27AABCR1234F1Z8",
-    type: "GSTR-3B",
-    period: "Oct 2026",
-    taxableLiability: 845000,
-    itcClaimed: 337500,
-    netPayable: 507500,
-    stage: "Gate G6 Four-Eyes Review",
-    progress: 75,
-    rulesPassed: "38 / 38 Passed",
-    gateLink: "/gates/G6-9845"
-  },
-  {
-    id: "RET-202",
-    client: "Mumbai Steel Corporation",
-    gstin: "27BBBCM5678G1Z2",
-    type: "GSTR-3B",
-    period: "Oct 2026",
-    taxableLiability: 2450000,
-    itcClaimed: 1980000,
-    netPayable: 470000,
-    stage: "Gate G3 IMS Commit Pending",
-    progress: 50,
-    rulesPassed: "38 / 38 Passed",
-    gateLink: "/gates/G3-9843"
-  },
-  {
-    id: "RET-203",
-    client: "Sharma & Sons Logistics",
-    gstin: "07DDDSA3456J1Z1",
-    type: "GSTR-1",
-    period: "Oct 2026",
-    taxableLiability: 510000,
-    itcClaimed: 0,
-    netPayable: 510000,
-    stage: "Gate G7 Partner DSC Signing",
-    progress: 90,
-    rulesPassed: "38 / 38 Passed",
-    gateLink: "/gates/G7-9846"
-  },
-  {
-    id: "RET-204",
-    client: "Global Tech Solutions LLP",
-    gstin: "29CCCGT9012H1Z8",
-    type: "GSTR-3B",
-    period: "Oct 2026",
-    taxableLiability: 690000,
-    itcClaimed: 645000,
-    netPayable: 45000,
-    stage: "Filed & ARN Acknowledged",
-    progress: 100,
-    rulesPassed: "38 / 38 Passed",
-    gateLink: "/gates/G4-9844"
-  }
-];
+const STAGE_PROGRESS: Record<string, number> = {
+  DRAFT: 10, RULES_CHECKED: 30, REVIEW_PENDING: 50, REVIEWED: 65, SIGNING_PENDING: 80, SIGNED: 90, FILED: 100, ACKNOWLEDGED: 100,
+};
+
+function mapReturn(r: any): ReturnItem {
+  const status = String(r.status ?? "DRAFT");
+  return {
+    id: String(r.id),
+    client: String(r.client ?? r.client_name ?? "Unknown client"),
+    gstin: String(r.gstin ?? ""),
+    type: String(r.return_type ?? ""),
+    period: String(r.period ?? ""),
+    taxableLiability: Number(r.total_tax_liability ?? 0),
+    itcClaimed: Number(r.total_itc_claimed ?? 0),
+    netPayable: Number(r.net_tax_payable ?? 0),
+    stage: status.replace(/_/g, " "),
+    progress: STAGE_PROGRESS[status] ?? 50,
+    rulesPassed: r.rules_total ? `${r.rules_passed ?? 0} / ${r.rules_total} Passed` : "Not evaluated",
+  };
+}
 
 export default function ReturnsPage() {
-  const [returnsList, setReturnsList] = useState<ReturnItem[]>(initialReturns);
-  const [isAssembling, setIsAssembling] = useState(false);
-  const [selectedClient, setSelectedClient] = useState("Rajesh Fabrics Pvt Ltd");
-  
+  const [returnsList, setReturnsList] = useState<ReturnItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+
   // Deterministic Reco State
   const [isReconciling, setIsReconciling] = useState(false);
   const [recoResult, setRecoResult] = useState<ReconciliationResult | null>(null);
-  const [isSeeding, setIsSeeding] = useState(false);
-  const [seedMessage, setSeedMessage] = useState<string | null>(null);
   const [isExportingXml, setIsExportingXml] = useState(false);
 
-  const handleAssembleReturn = () => {
-    setIsAssembling(true);
-    setTimeout(() => {
-      const clientObj = demoClients.find((c) => c.name === selectedClient) || demoClients[0];
-      const newRet: ReturnItem = {
-        id: `RET-${Math.floor(300 + Math.random() * 600)}`,
-        client: clientObj.name,
-        gstin: clientObj.gstin,
-        type: "GSTR-3B",
-        period: "Oct 2026",
-        taxableLiability: 1120000,
-        itcClaimed: 895000,
-        netPayable: 225000,
-        stage: "Gate G6 Four-Eyes Review",
-        progress: 80,
-        rulesPassed: "38 / 38 Passed",
-        gateLink: "/gates/G6-9845"
-      };
-      setReturnsList((prev) => [newRet, ...prev]);
-      setIsAssembling(false);
-    }, 600);
-  };
+  const fetchReturns = useCallback(async () => {
+    setLoading(true);
+    setLoadError(null);
+    const res = await api.get<any[]>("/returns/");
+    if (res.error || !Array.isArray(res.data)) setLoadError(res.error || "Could not load returns.");
+    else setReturnsList(res.data.map(mapReturn));
+    setLoading(false);
+  }, []);
 
-  const handleSeedDatabase = async () => {
-    setIsSeeding(true);
-    setSeedMessage(null);
-    const res = await api.seedDatabase();
-    if (res.data) {
-      setSeedMessage(`Seeded client ${res.data.client_gstin} with ${res.data.invoices_created} invoices.`);
-    } else {
-      setSeedMessage(`Seeded in offline mode: 8 Invoices & 7 GSTR-2B feed records ready.`);
-    }
-    setIsSeeding(false);
-  };
+  useEffect(() => {
+    fetchReturns();
+  }, [fetchReturns]);
 
   const handleRunReconciliation = async () => {
     setIsReconciling(true);
+    setActionError(null);
     const res = await api.getReconciliation();
-    if (res.data) {
-      setRecoResult(res.data);
-    } else {
-      // Offline fallback deterministic demonstration
-      setRecoResult({
-        summary: {
-          total_books_records: 8,
-          total_gstr2b_records: 7,
-          books_total_tax: 375500,
-          gstr2b_total_tax: 373500,
-          eligible_itc: 337500,
-          blocked_itc_17_5: 38000,
-          unclaimed_in_books: 36000,
-          missing_in_2b: 27000
-        },
-        exact_matches: [
-          { invoice_number: "INV-2026-001", supplier_gstin: "27AABCT9988G1Z1", total_tax: 180000, status: "MATCHED" },
-          { invoice_number: "INV-2026-002", supplier_gstin: "27BBBCT1122H1Z5", total_tax: 90000, status: "MATCHED" },
-          { invoice_number: "INV-2026-003", supplier_gstin: "27CCCD3344J1Z9", total_tax: 27000, status: "MATCHED" },
-          { invoice_number: "INV-2026-004", supplier_gstin: "27DDDE5566K1Z3", total_tax: 40500, status: "MATCHED" }
-        ],
-        fuzzy_matches: [],
-        value_mismatches: [
-          {
-            invoice_number: "INV-2026-005",
-            supplier_gstin: "27EEEF7788L1Z7",
-            books_tax: 3000,
-            gstr2b_tax: 1000,
-            tax_diff: 2000,
-            rule_violation: "Rule 88D Variance"
-          }
-        ],
-        missing_in_2b: [
-          { invoice_number: "INV-2026-007", supplier_gstin: "27GGGH1133N1Z5", books_tax: 27000, action: "Vendor Escalation" }
-        ],
-        unclaimed_in_books: [
-          { invoice_number: "INV-2026-999", supplier_gstin: "27HHHJ4455P1Z9", gstr2b_tax: 36000, action: "Draft Purchase Voucher" }
-        ],
-        blocked_credits_17_5: [
-          { invoice_number: "INV-2026-006", supplier_gstin: "27FFF7799M1Z1", total_tax: 38000, clause: "Section 17(5)(a) Motor Vehicle" }
-        ],
-        gstr_3b_table4: {
-          table_4_A_5_all_other_itc: { igst: 180000, cgst: 98750, sgst: 98750, total: 377500 },
-          table_4_B_1_as_per_rule_38_42_43_and_17_5: { igst: 0, cgst: 19000, sgst: 19000, total: 38000 },
-          table_4_C_net_itc_available: { igst: 180000, cgst: 79750, sgst: 79750, total: 337500 },
-          table_4_D_2_ineligible_under_16_4_or_pos: { igst: 0, cgst: 0, sgst: 0, total: 0 }
-        }
-      });
-    }
+    if (res.error || !res.data) setActionError(res.error || "Reconciliation failed.");
+    else setRecoResult(res.data);
     setIsReconciling(false);
   };
 
   const handleExportTallyXml = async () => {
     setIsExportingXml(true);
-    const xmlContent = await api.exportTallyXml();
-    const finalXml = xmlContent || `<!-- TallyPrime XML Export Fallback -->
-<ENVELOPE>
-  <HEADER>
-    <TALLYREQUEST>Import Data</TALLYREQUEST>
-  </HEADER>
-  <BODY>
-    <IMPORTDATA>
-      <REQUESTDESC>
-        <REPORTNAME>Vouchers</REPORTNAME>
-      </REQUESTDESC>
-      <REQUESTDATA>
-        <TALLYMESSAGE xmlns:UDF="TallyUDF">
-          <VOUCHER VCHTYPE="Purchase" ACTION="Create">
-            <DATE>20261015</DATE>
-            <NARRATION>Auto-generated from GST Inward Reco</NARRATION>
-          </VOUCHER>
-        </TALLYMESSAGE>
-      </REQUESTDATA>
-    </IMPORTDATA>
-  </BODY>
-</ENVELOPE>`;
+    setActionError(null);
+    const finalXml = await api.exportTallyXml();
+    if (!finalXml) {
+      setActionError("Tally XML export failed. Run the reconciliation first or retry.");
+      setIsExportingXml(false);
+      return;
+    }
 
     const blob = new Blob([finalXml], { type: "application/xml" });
     const url = URL.createObjectURL(blob);
@@ -255,17 +129,6 @@ export default function ReturnsPage() {
           <Button
             variant="outline"
             size="sm"
-            onClick={handleSeedDatabase}
-            disabled={isSeeding}
-            className="text-slate-700 border-slate-300"
-          >
-            <Database className="w-4 h-4 mr-1 text-slate-500" />
-            {isSeeding ? "Seeding..." : "Seed DB"}
-          </Button>
-
-          <Button
-            variant="outline"
-            size="sm"
             onClick={handleExportTallyXml}
             disabled={isExportingXml}
             className="text-emerald-700 border-emerald-300 hover:bg-emerald-50"
@@ -290,28 +153,13 @@ export default function ReturnsPage() {
             )}
           </Button>
 
-          <Button
-            onClick={handleAssembleReturn}
-            disabled={isAssembling}
-            className="bg-blue-600 hover:bg-blue-700 text-white font-semibold text-sm"
-          >
-            {isAssembling ? (
-              <>
-                <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> Checking 38 Rules...
-              </>
-            ) : (
-              <>
-                <Plus className="w-4 h-4 mr-1.5" /> Assemble GSTR-3B
-              </>
-            )}
-          </Button>
         </div>
       </div>
 
-      {seedMessage && (
-        <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-md text-xs text-emerald-800 flex items-center gap-2">
-          <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-          <span>{seedMessage}</span>
+      {actionError && (
+        <div className="p-3 bg-red-50 border border-red-200 rounded-md text-xs text-red-800 flex items-center gap-2">
+          <AlertTriangle className="w-4 h-4 text-red-600" />
+          <span>{actionError}</span>
         </div>
       )}
 
@@ -322,14 +170,14 @@ export default function ReturnsPage() {
             <div>
               <CardTitle className="text-sm font-bold text-indigo-950 flex items-center gap-2">
                 <ShieldCheck className="w-4 h-4 text-indigo-600" />
-                Live Deterministic Reconciliation Output — Rajesh Fabrics Pvt Ltd (27AABCR1234F1Z8)
+                Live Deterministic Reconciliation Output
               </CardTitle>
               <p className="text-xs text-indigo-700 mt-0.5">
                 Evaluated across Books vs GSTR-2B feed. Zero LLM calculation. All rules verified against CGST Rules 88C/88D & Sec 17(5).
               </p>
             </div>
             <Badge className="bg-indigo-100 text-indigo-800 border-indigo-300">
-              Period: Oct 2026
+              {recoResult.summary.total_books_records} books / {recoResult.summary.total_gstr2b_records} 2B records
             </Badge>
           </CardHeader>
           <CardContent className="p-5 space-y-5">
@@ -419,7 +267,7 @@ export default function ReturnsPage() {
                   Unclaimed in Books (Available in 2B): {recoResult.unclaimed_in_books.length} Invoices
                 </div>
                 <div className="text-xs text-blue-800">
-                  Total Tax ₹36,000. Tally XML payload generated for one-click import into client books.
+                  Total Tax {formatIndianCurrency(recoResult.summary.unclaimed_in_books)}. Tally XML payload generated for one-click import into client books.
                 </div>
               </div>
             </div>
@@ -447,6 +295,18 @@ export default function ReturnsPage() {
               </tr>
             </thead>
             <tbody className="divide-y">
+              {loading && (
+                <tr><td colSpan={8} className="p-8 text-center text-slate-500">Loading returns...</td></tr>
+              )}
+              {!loading && loadError && (
+                <tr><td colSpan={8} className="p-8 text-center text-red-700">
+                  {loadError}
+                  <button onClick={fetchReturns} className="underline font-semibold ml-2">Retry</button>
+                </td></tr>
+              )}
+              {!loading && !loadError && returnsList.length === 0 && (
+                <tr><td colSpan={8} className="p-8 text-center text-slate-500">No return obligations found.</td></tr>
+              )}
               {returnsList.map((ret) => (
                 <tr key={ret.id} className="hover:bg-slate-50">
                   <td className="p-3.5">
@@ -483,9 +343,9 @@ export default function ReturnsPage() {
                     <Progress value={ret.progress} className="h-2" />
                   </td>
                   <td className="p-3.5 text-center">
-                    <Link href={ret.gateLink}>
+                    <Link href="/gates">
                       <Button variant="outline" size="sm" className="text-slate-900 font-semibold">
-                        <Eye className="w-3.5 h-3.5 mr-1" /> Open Gate
+                        <Eye className="w-3.5 h-3.5 mr-1" /> Open Gates
                       </Button>
                     </Link>
                   </td>

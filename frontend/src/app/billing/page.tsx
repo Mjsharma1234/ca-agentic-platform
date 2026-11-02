@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { 
   Receipt, Plus, Send, CheckCircle2, Clock, AlertTriangle, 
   Search, Eye, CreditCard, ChevronRight, Download, Filter, 
@@ -12,130 +12,20 @@ import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { formatIndianCurrency } from "@/lib/utils";
 import { api } from "@/lib/api";
-import { demoClients } from "@/lib/demo-data";
+import type { Client } from "@/lib/types";
 import { 
   FirmInvoice, ServiceLine, RATE_CARD, mapInvoice, FirmInvoiceStatus 
 } from "@/lib/billing-types";
 
-// Fallback seed invoices if API is connecting
-const INITIAL_INVOICES: FirmInvoice[] = [
-  {
-    id: "inv-001",
-    invoiceNumber: "NC/26-27/00142",
-    clientId: "c1",
-    clientName: "Rajesh Textiles Pvt Ltd",
-    clientGstin: "27AAACR1234F1Z5",
-    clientPan: "AAACR1234F",
-    services: [
-      { description: "GST Monthly Compliance (GSTR-1, GSTR-3B, IMS)", sacCode: "998215", quantity: 1, rate: 12000, amount: 12000 },
-      { description: "TallyPrime Reconciled Purchase Journal Export", sacCode: "998215", quantity: 1, rate: 3000, amount: 3000 }
-    ],
-    subtotal: 15000,
-    gstRate: 18,
-    gstAmount: 2700,
-    totalAmount: 17700,
-    tds194jRate: 10,
-    tds194jAmount: 1500,
-    netReceivable: 16200,
-    status: "SENT",
-    issueDate: "2026-10-15",
-    dueDate: "2026-10-30",
-    periodOfService: "October 2026",
-    paymentReceived: 0,
-    notes: "Professional fees for GSTR-1, GSTR-3B preparation and IMS reconciliation.",
-    createdBy: "Amit Sharma",
-    template: "standard",
-    sentAt: "2026-10-15T11:30:00Z"
-  },
-  {
-    id: "inv-002",
-    invoiceNumber: "NC/26-27/00143",
-    clientId: "c2",
-    clientName: "Mumbai Steel Corporation",
-    clientGstin: "27BBBCM5678G1Z2",
-    clientPan: "BBBCM5678G",
-    services: [
-      { description: "Tax Audit Report (Form 3CD & 3CA)", sacCode: "998215", quantity: 1, rate: 85000, amount: 85000 },
-      { description: "GST Annual Return & 9C Reconciliation", sacCode: "998215", quantity: 1, rate: 45000, amount: 45000 }
-    ],
-    subtotal: 130000,
-    gstRate: 18,
-    gstAmount: 23400,
-    totalAmount: 153400,
-    tds194jRate: 10,
-    tds194jAmount: 13000,
-    netReceivable: 140400,
-    status: "PAID",
-    issueDate: "2026-09-28",
-    dueDate: "2026-10-15",
-    periodOfService: "Q2 FY 2026-27",
-    paymentReceived: 140400,
-    paymentDate: "2026-10-12",
-    paymentReference: "NEFT-HDFC00289104",
-    notes: "Tax Audit sign-off completed by CA Amit Sharma (UDIN generated).",
-    createdBy: "Amit Sharma",
-    template: "detailed"
-  },
-  {
-    id: "inv-003",
-    invoiceNumber: "NC/26-27/00144",
-    clientId: "c3",
-    clientName: "Global Tech Solutions LLP",
-    clientGstin: "29CCCGT9012H1Z8",
-    clientPan: "CCCGT9012H",
-    services: [
-      { description: "GST Monthly Compliance & Rule 88D Representation", sacCode: "998215", quantity: 1, rate: 18000, amount: 18000 }
-    ],
-    subtotal: 18000,
-    gstRate: 18,
-    gstAmount: 3240,
-    totalAmount: 21240,
-    tds194jRate: 10,
-    tds194jAmount: 1800,
-    netReceivable: 19440,
-    status: "OVERDUE",
-    issueDate: "2026-09-10",
-    dueDate: "2026-09-25",
-    periodOfService: "September 2026",
-    paymentReceived: 0,
-    notes: "Includes DRC-01C response filing support.",
-    createdBy: "Amit Sharma",
-    template: "standard",
-    sentAt: "2026-09-10T09:00:00Z"
-  },
-  {
-    id: "inv-004",
-    invoiceNumber: "NC/26-27/00145",
-    clientId: "c4",
-    clientName: "Sharma & Sons Logistics",
-    clientGstin: "07DDDSA3456J1Z1",
-    clientPan: "DDDSA3456J",
-    services: [
-      { description: "TDS Quarterly Return (Form 26Q) Q2", sacCode: "998215", quantity: 1, rate: 7500, amount: 7500 }
-    ],
-    subtotal: 7500,
-    gstRate: 18,
-    gstAmount: 1350,
-    totalAmount: 8850,
-    tds194jRate: 10,
-    tds194jAmount: 750,
-    netReceivable: 8100,
-    status: "DRAFT",
-    issueDate: "2026-10-28",
-    dueDate: "2026-11-12",
-    periodOfService: "Q2 FY 2026-27",
-    paymentReceived: 0,
-    notes: "Draft invoice for partner approval before transmission.",
-    createdBy: "Amit Sharma",
-    template: "standard"
-  }
-];
-
 export default function BillingPage() {
-  const [invoices, setInvoices] = useState<FirmInvoice[]>(INITIAL_INVOICES);
+  const [invoices, setInvoices] = useState<FirmInvoice[]>([]);
   const [filterStatus, setFilterStatus] = useState<string>("ALL");
   const [searchQuery, setSearchQuery] = useState<string>("");
-  const [loading, setLoading] = useState<boolean>(false);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [busy, setBusy] = useState<boolean>(false);
+  const [clients, setClients] = useState<Client[]>([]);
 
   // Modals state
   const [createModalOpen, setCreateModalOpen] = useState(false);
@@ -144,7 +34,7 @@ export default function BillingPage() {
   const [selectedInvoice, setSelectedInvoice] = useState<FirmInvoice | null>(null);
 
   // New Invoice Form state
-  const [newClientId, setNewClientId] = useState(demoClients[0].id);
+  const [newClientId, setNewClientId] = useState<string>("");
   const [newPeriod, setNewPeriod] = useState("October 2026");
   const [newTemplate, setNewTemplate] = useState("standard");
   const [newNotes, setNewNotes] = useState("Professional services rendered for statutory compliance.");
@@ -158,21 +48,22 @@ export default function BillingPage() {
   const [payRef, setPayRef] = useState<string>("");
   const [payTdsDeducted, setPayTdsDeducted] = useState<boolean>(true);
 
-  // Fetch from API on mount
-  useEffect(() => {
-    fetchInvoices();
+  const fetchInvoices = useCallback(async () => {
+    setLoading(true);
+    setLoadError(null);
+    const [inv, cl] = await Promise.all([api.getBillingInvoices(), api.listClients()]);
+    if (inv.error || !Array.isArray(inv.data)) setLoadError(inv.error || "Could not load invoices.");
+    else setInvoices(inv.data.map(mapInvoice));
+    if (cl.data) {
+      setClients(cl.data);
+      setNewClientId((cur) => cur || cl.data![0]?.id || "");
+    }
+    setLoading(false);
   }, []);
 
-  const fetchInvoices = async () => {
-    try {
-      const res = await api.getBillingInvoices();
-      if (res.data && Array.isArray(res.data) && res.data.length > 0) {
-        setInvoices(res.data.map(mapInvoice));
-      }
-    } catch {
-      // Keep initial invoices as fallback
-    }
-  };
+  useEffect(() => {
+    fetchInvoices();
+  }, [fetchInvoices]);
 
   // Calculations for New Invoice
   const subtotal = serviceLines.reduce((acc, l) => acc + (l.amount || 0), 0);
@@ -211,98 +102,75 @@ export default function BillingPage() {
   };
 
   const handleCreateInvoice = async () => {
-    const client = demoClients.find(c => c.id === newClientId) || demoClients[0];
-    const newInv: Partial<FirmInvoice> = {
-      clientId: client.id,
-      clientName: client.name,
-      clientGstin: client.gstin,
-      clientPan: client.pan,
-      services: serviceLines,
-      subtotal,
-      gstRate: 18,
-      gstAmount,
-      totalAmount,
-      tds194jRate: 10,
-      tds194jAmount,
-      netReceivable,
-      periodOfService: newPeriod,
-      notes: newNotes,
-      template: newTemplate
-    };
-
-    try {
-      await api.createInvoice(newInv);
-    } catch {
-      // offline handling
+    const client = clients.find((c) => c.id === newClientId);
+    if (!client) {
+      setActionError("Select a client to invoice.");
+      return;
     }
-
-    const localInv: FirmInvoice = {
-      id: `inv-${Date.now().toString().slice(-4)}`,
-      invoiceNumber: `NC/26-27/00${140 + invoices.length + 1}`,
-      clientId: client.id,
-      clientName: client.name,
-      clientGstin: client.gstin,
-      clientPan: client.pan,
-      services: serviceLines,
-      subtotal,
-      gstRate: 18,
-      gstAmount,
-      totalAmount,
-      tds194jRate: 10,
-      tds194jAmount,
-      netReceivable,
-      status: "DRAFT",
-      issueDate: new Date().toISOString().split("T")[0],
-      dueDate: new Date(Date.now() + 15 * 86400000).toISOString().split("T")[0],
-      periodOfService: newPeriod,
-      paymentReceived: 0,
+    if (serviceLines.length === 0 || subtotal <= 0) {
+      setActionError("Add at least one service line with a non-zero amount.");
+      return;
+    }
+    setBusy(true);
+    setActionError(null);
+    const res = await api.createInvoice({
+      client_id: client.id,
+      client_name: client.name,
+      client_gstin: client.gstin,
+      client_pan: client.pan,
+      services: serviceLines.map((l) => ({
+        description: l.description, sac_code: l.sacCode, quantity: l.quantity, rate: l.rate, amount: l.amount,
+      })),
+      period_of_service: newPeriod,
+      issue_date: new Date().toISOString().split("T")[0],
+      due_date: new Date(Date.now() + 15 * 86400000).toISOString().split("T")[0],
       notes: newNotes,
-      createdBy: "Amit Sharma",
-      template: newTemplate
-    };
-
-    setInvoices(prev => [localInv, ...prev]);
+      template: newTemplate,
+    });
+    setBusy(false);
+    if (res.error || !res.data) {
+      setActionError(res.error || "Could not create invoice.");
+      return;
+    }
     setCreateModalOpen(false);
+    await fetchInvoices();
   };
 
   const handleSendInvoice = async (inv: FirmInvoice) => {
-    try {
-      await api.sendInvoice(inv.id);
-    } catch {}
-    setInvoices(prev => prev.map(i => i.id === inv.id ? { ...i, status: "SENT", sentAt: new Date().toISOString() } : i));
-    if (selectedInvoice?.id === inv.id) {
-      setSelectedInvoice(prev => prev ? { ...prev, status: "SENT" } : null);
+    setActionError(null);
+    const res = await api.sendInvoice(inv.id);
+    if (res.error) {
+      setActionError(res.error);
+      return;
     }
+    await fetchInvoices();
+    setSelectedInvoice(null);
+    setDetailModalOpen(false);
   };
 
   const handleRecordPayment = async () => {
     if (!selectedInvoice) return;
-    try {
-      await api.recordPayment(selectedInvoice.id, {
-        amount: payAmount,
-        payment_date: payDate,
-        reference: payRef,
-        tds_deducted: payTdsDeducted
-      });
-    } catch {}
-
-    setInvoices(prev => prev.map(i => {
-      if (i.id === selectedInvoice.id) {
-        const totalPaid = (i.paymentReceived || 0) + payAmount;
-        const isFull = totalPaid >= i.netReceivable;
-        return {
-          ...i,
-          status: isFull ? "PAID" : "PARTIALLY_PAID",
-          paymentReceived: totalPaid,
-          paymentDate: payDate,
-          paymentReference: payRef
-        };
-      }
-      return i;
-    }));
-
+    if (!(payAmount > 0)) {
+      setActionError("Payment amount must be greater than zero.");
+      return;
+    }
+    setBusy(true);
+    setActionError(null);
+    const res = await api.recordPayment(selectedInvoice.id, {
+      amount: payAmount,
+      payment_date: payDate,
+      reference: payRef,
+      tds_deducted: payTdsDeducted,
+    });
+    setBusy(false);
+    if (res.error) {
+      setActionError(res.error);
+      return;
+    }
     setPaymentModalOpen(false);
     setDetailModalOpen(false);
+    setSelectedInvoice(null);
+    await fetchInvoices();
   };
 
   // Metrics computation
@@ -416,6 +284,13 @@ export default function BillingPage() {
         </Card>
       </div>
 
+      {actionError && (
+        <div className="p-3 rounded border border-red-300 bg-red-50 text-red-900 text-xs flex items-center justify-between">
+          <span>{actionError}</span>
+          <button onClick={() => setActionError(null)} className="font-bold">Dismiss</button>
+        </div>
+      )}
+
       {/* Section 2: Invoice Management Table */}
       <Card className="bg-white border-slate-200 shadow-sm">
         <CardHeader className="p-4 border-b flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -528,10 +403,19 @@ export default function BillingPage() {
                   </td>
                 </tr>
               ))}
-              {filtered.length === 0 && (
+              {loading && (
+                <tr><td colSpan={10} className="py-8 text-center text-slate-500">Loading invoices...</td></tr>
+              )}
+              {!loading && loadError && (
+                <tr><td colSpan={10} className="py-8 text-center text-red-700">
+                  {loadError}{" "}
+                  <button onClick={fetchInvoices} className="underline font-semibold ml-2">Retry</button>
+                </td></tr>
+              )}
+              {!loading && !loadError && filtered.length === 0 && (
                 <tr>
                   <td colSpan={10} className="py-8 text-center text-slate-500">
-                    No invoices found matching criteria.
+                    {invoices.length === 0 ? "No invoices yet." : "No invoices found matching criteria."}
                   </td>
                 </tr>
               )}
@@ -589,8 +473,9 @@ export default function BillingPage() {
                 onChange={(e) => setNewClientId(e.target.value)}
                 className="w-full border border-slate-300 rounded px-2.5 py-1.5 bg-white text-slate-900"
               >
-                {demoClients.map(c => (
-                  <option key={c.id} value={c.id}>{c.name} ({c.gstin})</option>
+                {clients.length === 0 && <option value="">No clients available</option>}
+                {clients.map(c => (
+                  <option key={c.id} value={c.id}>{c.name} ({c.gstin || c.pan})</option>
                 ))}
               </select>
             </div>

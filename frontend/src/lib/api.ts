@@ -1,4 +1,60 @@
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
+import type {
+  AuthUser, Client, ClientInput, Gate, GateStats, DashboardOverview, DashboardException, FilingTracker, Deadline,
+  DocumentItem, SigningRequestView, SignerDevice,
+} from "./types";
+
+/** Same-origin BFF: the session cookie is httpOnly, so no token ever passes through this file. */
+const BASE = "/bff";
+
+export interface ApiResult<T> {
+  data: T | null;
+  error: string | null;
+  status: number;
+}
+
+export const UNAUTHORIZED_EVENT = "ca:unauthorized";
+
+function errorText(body: any, fallback: string): string {
+  const d = body?.detail;
+  if (typeof d === "string") return d;
+  if (Array.isArray(d)) return d.map((e) => e?.msg ?? "Invalid input").join("; ");
+  return fallback;
+}
+
+async function request<T>(method: string, endpoint: string, body?: unknown): Promise<ApiResult<T>> {
+  const isForm = typeof FormData !== "undefined" && body instanceof FormData;
+  const headers: Record<string, string> = { Accept: "application/json" };
+  if (method !== "GET") headers["X-Requested-With"] = "ca-web";
+  if (body !== undefined && !isForm) headers["Content-Type"] = "application/json";
+  try {
+    const res = await fetch(`${BASE}${endpoint.startsWith("/") ? "" : "/"}${endpoint}`, {
+      method,
+      headers,
+      credentials: "same-origin",
+      cache: "no-store",
+      body: body === undefined ? undefined : isForm ? (body as FormData) : JSON.stringify(body),
+    });
+    if (res.status === 401 && typeof window !== "undefined") window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+    const text = res.status === 204 ? "" : await res.text();
+    let json: any = null;
+    try {
+      json = text ? JSON.parse(text) : null;
+    } catch {
+      /* non-JSON body (e.g. XML export) */
+    }
+    if (!res.ok) return { data: null, error: errorText(json, `Request failed (HTTP ${res.status})`), status: res.status };
+    return { data: (json ?? (text as unknown)) as T, error: null, status: res.status };
+  } catch {
+    return { data: null, error: "Network error — the platform could not be reached.", status: 0 };
+  }
+}
+
+const qs = (params: Record<string, string | undefined>) => {
+  const p = new URLSearchParams();
+  Object.entries(params).forEach(([k, v]) => v && p.append(k, v));
+  const s = p.toString();
+  return s ? `?${s}` : "";
+};
 
 export interface ReconciliationResult {
   summary: {
@@ -17,217 +73,103 @@ export interface ReconciliationResult {
   missing_in_2b: any[];
   unclaimed_in_books: any[];
   blocked_credits_17_5: any[];
-  gstr_3b_table4: {
-    table_4_A_5_all_other_itc: { igst: number; cgst: number; sgst: number; total: number };
-    table_4_B_1_as_per_rule_38_42_43_and_17_5: { igst: number; cgst: number; sgst: number; total: number };
-    table_4_C_net_itc_available: { igst: number; cgst: number; sgst: number; total: number };
-    table_4_D_2_ineligible_under_16_4_or_pos: { igst: number; cgst: number; sgst: number; total: number };
-  };
+  gstr_3b_table4: Record<string, { igst: number; cgst: number; sgst: number; total: number }>;
 }
 
-const getAuthHeaders = (): Record<string, string> => {
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (typeof window !== "undefined") {
-    const token = localStorage.getItem("ca_token");
-    if (token) {
-      headers["Authorization"] = `Bearer ${token}`;
-    }
-  }
-  return headers;
-};
-
 export const api = {
-  get: async <T = any>(endpoint: string): Promise<{ data: T | null; error: string | null }> => {
-    try {
-      const url = endpoint.startsWith("http") ? endpoint : `${API_BASE}${endpoint.startsWith("/") ? "" : "/"}${endpoint}`;
-      const res = await fetch(url, { headers: getAuthHeaders() });
-      if (!res.ok) {
-        const errJson = await res.json().catch(() => ({}));
-        throw new Error(errJson.detail || `HTTP ${res.status}: ${res.statusText}`);
-      }
-      const data = await res.json();
-      return { data, error: null };
-    } catch (err: any) {
-      console.warn(`API GET ${endpoint} error:`, err.message);
-      return { data: null, error: err.message };
-    }
+  get: <T = any>(endpoint: string) => request<T>("GET", endpoint),
+  post: <T = any>(endpoint: string, body?: unknown) => request<T>("POST", endpoint, body ?? {}),
+  put: <T = any>(endpoint: string, body?: unknown) => request<T>("PUT", endpoint, body ?? {}),
+  del: <T = any>(endpoint: string) => request<T>("DELETE", endpoint),
+
+  // ── Auth ────────────────────────────────────────────────────────────────
+  sendOtp: (identifier: string, channel?: string) =>
+    request<{ status: string; channel: string; expires_in_seconds: number; dev_otp?: string }>("POST", "/auth/otp/send", { identifier, channel }),
+  verifyOtp: (identifier: string, otp: string) =>
+    request<{ token_type: string; user: AuthUser }>("POST", "/auth/otp/verify", { identifier, otp }),
+  verifyFirebaseToken: (idToken: string) =>
+    request<{ token_type: string; user: AuthUser }>("POST", "/auth/firebase/verify", { id_token: idToken }),
+  getMe: () => request<AuthUser>("GET", "/auth/me"),
+  logout: () => request<null>("POST", "/auth/logout", {}),
+  getDemoPersonas: () =>
+    request<Array<{ phone: string; email: string; full_name: string; role: string; membership_no: string | null; badge: string }>>(
+      "GET", "/auth/demo-personas"
+    ),
+
+  // ── Dashboard ───────────────────────────────────────────────────────────
+  getOverview: () => request<DashboardOverview>("GET", "/dashboard/overview"),
+  getExceptions: () => request<DashboardException[]>("GET", "/dashboard/exceptions"),
+  getFilingTracker: () => request<FilingTracker>("GET", "/dashboard/filing-tracker"),
+  getDeadlines: () => request<Deadline[]>("GET", "/dashboard/deadlines"),
+
+  // ── Gates ───────────────────────────────────────────────────────────────
+  listGates: (status?: string) => request<Gate[]>("GET", `/gates${qs({ status })}`),
+  getGate: (id: string) => request<Gate>("GET", `/gates/${id}`),
+  getGateStats: () => request<GateStats>("GET", "/gates/stats"),
+  approveGate: (id: string, notes = "") => request<Gate>("POST", `/gates/${id}/approve`, { notes }),
+  rejectGate: (id: string, notes: string) => request<Gate>("POST", `/gates/${id}/reject`, { notes }),
+  escalateGate: (id: string, notes: string) => request<Gate>("POST", `/gates/${id}/escalate`, { notes }),
+
+  // ── Clients ─────────────────────────────────────────────────────────────
+  listClients: () => request<Client[]>("GET", "/clients/"),
+  createClient: (c: ClientInput) => request<Client>("POST", "/clients/", c),
+  updateClient: (id: string, c: ClientInput) => request<Client>("PUT", `/clients/${id}`, c),
+  deleteClient: (id: string) => request<null>("DELETE", `/clients/${id}`),
+  getClientTasks: (id: string) => request<{ client_id: string; tasks_count: number; tasks: any[] }>("GET", `/clients/${id}/tasks`),
+  generateClientTasks: (id: string) => request<{ tasks_count: number; tasks: any[] }>("POST", `/clients/${id}/generate-tasks`, {}),
+  generateTasksAll: () => request<any>("POST", "/clients/generate-tasks-all", {}),
+  importClientsExcel: (file: File) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    return request<any>("POST", "/clients/import-excel", fd);
   },
 
-  post: async <T = any>(endpoint: string, body?: any): Promise<{ data: T | null; error: string | null }> => {
-    try {
-      const url = endpoint.startsWith("http") ? endpoint : `${API_BASE}${endpoint.startsWith("/") ? "" : "/"}${endpoint}`;
-      const res = await fetch(url, {
-        method: "POST",
-        headers: getAuthHeaders(),
-        body: body ? JSON.stringify(body) : undefined,
-      });
-      if (!res.ok) {
-        const errJson = await res.json().catch(() => ({}));
-        throw new Error(errJson.detail || `HTTP ${res.status}: ${res.statusText}`);
-      }
-      const data = await res.json();
-      return { data, error: null };
-    } catch (err: any) {
-      console.warn(`API POST ${endpoint} error:`, err.message);
-      return { data: null, error: err.message };
-    }
+  // ── Documents ───────────────────────────────────────────────────────────
+  listDocuments: (clientId?: string) => request<DocumentItem[]>("GET", `/documents/${qs({ client_id: clientId })}`),
+  uploadDocument: (clientId: string, file: File) => {
+    const fd = new FormData();
+    fd.append("client_id", clientId);
+    fd.append("file", file);
+    return request<DocumentItem>("POST", "/documents/upload", fd);
   },
+  verifyDocument: (id: string) => request<{ status: string; document: DocumentItem }>("POST", `/documents/${id}/verify`, {}),
 
-  // Auth & OTP Endpoints
-  sendOtp: async (identifier: string, channel?: string) => {
-    return api.post<{ status: string; channel: string; expires_in_seconds: number; dev_otp?: string }>(
-      "/auth/otp/send",
-      { identifier, channel }
-    );
-  },
+  // ── Gate G7: desktop-signer requests (the web app never sees a PIN) ─────
+  listSigningRequests: (entityId?: string) => request<SigningRequestView[]>("GET", `/signing/requests${qs({ entity_id: entityId })}`),
+  getSigningRequest: (id: string) => request<SigningRequestView>("GET", `/signing/requests/${id}`),
+  approveSignerDevice: (userCode: string, approve: boolean) =>
+    request<{ status: string; device_name: string }>("POST", "/signing/device/approve", { user_code: userCode, approve }),
+  listSignerDevices: () => request<SignerDevice[]>("GET", "/signing/devices"),
+  revokeSignerDevice: (id: string) => request<null>("DELETE", `/signing/devices/${id}`),
+  prepareSigning: (entityType: string, entityId: string) =>
+    request<{
+      entity_type: string; entity_id: string; document_hash: string; document_label: string; return_status: string;
+      eligible_signers: Array<{ id: string; full_name: string }>;
+    }>("GET", `/signing/prepare${qs({ entity_type: entityType, entity_id: entityId })}`),
+  createSigningRequest: (body: {
+    entity_type: string; entity_id: string; document_hash: string; document_label: string; signer_id: string; gate_id?: string;
+  }) => request<SigningRequestView>("POST", "/signing/requests", body),
 
-  verifyOtp: async (identifier: string, otp: string) => {
-    return api.post<{
-      access_token: string;
-      token_type: string;
-      user: {
-        id: string;
-        firm_id: string;
-        full_name: string;
-        email: string;
-        phone: string;
-        role: string;
-        membership_no?: string;
-      };
-    }>("/auth/otp/verify", { identifier, otp });
-  },
-
-  verifyFirebaseToken: async (idToken: string) => {
-    return api.post<{
-      access_token: string;
-      token_type: string;
-      user: {
-        id: string;
-        firm_id: string;
-        full_name: string;
-        email: string;
-        phone: string;
-        role: string;
-        membership_no?: string;
-      };
-    }>("/auth/firebase/verify", { id_token: idToken });
-  },
-
-  getMe: async () => {
-    return api.get<{
-      id: string;
-      firm_id: string;
-      full_name: string;
-      email: string;
-      phone: string;
-      role: string;
-      membership_no?: string;
-    }>("/auth/me");
-  },
-
-  getDemoPersonas: async () => {
-    return api.get<Array<{
-      phone: string;
-      email: string;
-      full_name: string;
-      role: string;
-      membership_no: string | null;
-      badge: string;
-    }>>("/auth/demo-personas");
-  },
-
-  seedDatabase: async () => {
-    return api.post("/seed");
-  },
-
-  getReconciliation: async () => {
-    return api.get<ReconciliationResult>("/returns/reconciliation");
-  },
-
+  // ── Returns / reconciliation ────────────────────────────────────────────
+  getReconciliation: () => request<ReconciliationResult>("GET", "/returns/reconciliation"),
   exportTallyXml: async (): Promise<string | null> => {
-    try {
-      const res = await fetch(`${API_BASE}/returns/export-tally-xml`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      return await res.text();
-    } catch (err) {
-      console.error("Export Tally XML error:", err);
-      return null;
-    }
+    const res = await request<string>("GET", "/returns/export-tally-xml");
+    return res.error ? null : (res.data as string);
   },
 
-  signReturn: async (returnId: string) => {
-    return api.post(`/returns/${returnId}/sign`);
-  },
+  // ── Billing ─────────────────────────────────────────────────────────────
+  getBillingInvoices: (status?: string, clientId?: string) => request<any>("GET", `/billing/invoices${qs({ status, client_id: clientId })}`),
+  getBillingInvoice: (id: string) => request<any>("GET", `/billing/invoices/${id}`),
+  getBillingSummary: () => request<any>("GET", "/billing/summary"),
+  createInvoice: (data: any) => request<any>("POST", "/billing/invoices", data),
+  sendInvoice: (id: string) => request<any>("POST", `/billing/invoices/${id}/send`, {}),
+  recordPayment: (id: string, data: { amount: number; payment_date: string; reference: string; tds_deducted: boolean }) =>
+    request<any>("POST", `/billing/invoices/${id}/record-payment`, data),
+  getRateCard: () => request<any>("GET", "/billing/rate-card"),
+  generateInvoiceFromWork: (data: any) => request<any>("POST", "/billing/invoices/generate-from-work", data),
 
-  // ── Billing & Invoicing ──────────────────────────────────────────────────
-
-  getBillingInvoices: async (status?: string, clientId?: string) => {
-    const params = new URLSearchParams();
-    if (status) params.append('status', status);
-    if (clientId) params.append('client_id', clientId);
-    const qs = params.toString() ? `?${params.toString()}` : '';
-    return api.get(`/billing/invoices${qs}`);
-  },
-
-  getBillingInvoice: async (id: string) => {
-    return api.get(`/billing/invoices/${id}`);
-  },
-
-  getBillingSummary: async () => {
-    return api.get('/billing/summary');
-  },
-
-  createInvoice: async (data: any) => {
-    return api.post('/billing/invoices', data);
-  },
-
-  sendInvoice: async (id: string) => {
-    return api.post(`/billing/invoices/${id}/send`);
-  },
-
-  recordPayment: async (
-    id: string,
-    data: { amount: number; payment_date: string; reference: string; tds_deducted: boolean }
-  ) => {
-    return api.post(`/billing/invoices/${id}/record-payment`, data);
-  },
-
-  getRateCard: async () => {
-    return api.get('/billing/rate-card');
-  },
-
-  generateInvoiceFromWork: async (data: any) => {
-    return api.post('/billing/invoices/generate-from-work', data);
-  },
-
-  // ── Client Bulk Import & Auto-Tasks ──
-  importClientsExcel: async (file: File) => {
-    const formData = new FormData();
-    formData.append("file", file);
-    const url = `${API_BASE}/clients/import-excel`;
-    const res = await fetch(url, { method: "POST", body: formData });
-    if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
-    return await res.json();
-  },
-
-  generateTasksAll: async () => {
-    return api.post('/clients/generate-tasks-all');
-  },
-
-  generateClientTasks: async (clientId: string) => {
-    return api.post(`/clients/${clientId}/generate-tasks`);
-  },
-
-  getClientTasks: async (clientId: string) => {
-    return api.get(`/clients/${clientId}/tasks`);
-  },
-
-  // ── Government Extension & Auto-Redating ──
-  getActiveExtensions: async () => {
-    return api.get('/statutory-calendar/extensions');
-  },
-
-  applyGovernmentExtension: async (extensionId: string) => {
-    return api.post('/statutory-calendar/extensions/apply', { extension_id: extensionId });
-  },
+  // ── Government extensions ───────────────────────────────────────────────
+  getActiveExtensions: () => request<any>("GET", "/firm-os/statutory-calendar/extensions"),
+  applyGovernmentExtension: (extensionId: string) =>
+    request<any>("POST", "/firm-os/statutory-calendar/extensions/apply", { extension_id: extensionId }),
 };

@@ -13,7 +13,7 @@ from ...core.database import get_db
 from ..deps import get_current_user, User as DepUser
 from ...models.tenant import Firm, User, UserRole, AuditBlock
 from ...deterministic_core.otp_service import OTPService
-from ...deterministic_core.audit_chain import compute_block_hash, GENESIS_HASH
+from ...deterministic_core.audit_chain import append_audit_block
 
 logger = logging.getLogger("ca_platform.auth")
 router = APIRouter(prefix="/auth", tags=["Authentication & OTP"])
@@ -45,7 +45,7 @@ class UserProfileResponse(BaseModel):
 class AuthResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
-    expires_in_minutes: int = 10080 # 7 days
+    expires_in_minutes: int
     user: UserProfileResponse
 
 # -------------------------------------------------------------
@@ -185,18 +185,6 @@ def verify_otp(req: VerifyOTPRequest, request: Request, db: Session = Depends(ge
 
     # ICAI SQC-1 Cryptographic Audit Block Logging
     try:
-        stmt = (
-            select(AuditBlock)
-            .where(AuditBlock.firm_id == user.firm_id)
-            .order_by(AuditBlock.sequence.desc())
-            .limit(1)
-        )
-        last_block = db.execute(stmt).scalar_one_or_none()
-        new_sequence = (last_block.sequence + 1) if last_block else 1
-        prev_hash = last_block.block_hash if last_block else GENESIS_HASH
-
-        now_utc = datetime.now(timezone.utc)
-        iso_now = now_utc.isoformat()
         payload = {
             "auth_method": "OTP",
             "channel": channel,
@@ -204,32 +192,11 @@ def verify_otp(req: VerifyOTPRequest, request: Request, db: Session = Depends(ge
             "client_ip": request.client.host if request.client else "unknown",
             "user_agent": request.headers.get("user-agent", "unknown")
         }
-        b_hash = compute_block_hash(
-            sequence=new_sequence,
-            prev_hash=prev_hash,
-            actor_id=str(user.id),
-            actor_role=user.role,
-            action="LOGIN_OTP_VERIFIED",
-            entity_type="USER_SESSION",
-            entity_id=str(user.id),
-            payload=payload,
-            timestamp=iso_now
+        # Single canonical writer: login blocks must hash exactly like every other block,
+        # otherwise the chain verifier reports tampering after the first login.
+        append_audit_block(
+            db, user.firm_id, str(user.id), user.role, "LOGIN_OTP_VERIFIED", "USER_SESSION", str(user.id), payload
         )
-        audit_block = AuditBlock(
-            firm_id=user.firm_id,
-            sequence=new_sequence,
-            prev_hash=prev_hash,
-            block_hash=b_hash,
-            actor_id=str(user.id),
-            actor_role=user.role,
-            action="LOGIN_OTP_VERIFIED",
-            entity_type="USER_SESSION",
-            entity_id=str(user.id),
-            payload_json=payload,
-            timestamp=now_utc
-        )
-        db.add(audit_block)
-        db.commit()
     except Exception as e:
         logger.warning(f"Audit block logging non-blocking error: {e}")
 
@@ -243,12 +210,12 @@ def verify_otp(req: VerifyOTPRequest, request: Request, db: Session = Depends(ge
         "full_name": user.full_name,
         "membership_no": user.membership_no
     }
-    token = create_access_token(data=token_claims, expires_delta=timedelta(days=7))
+    token = create_access_token(data=token_claims, expires_delta=timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES))
 
     return AuthResponse(
         access_token=token,
         token_type="bearer",
-        expires_in_minutes=7 * 24 * 60,
+        expires_in_minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES,
         user=UserProfileResponse(
             id=str(user.id),
             firm_id=str(user.firm_id),
@@ -350,17 +317,6 @@ def verify_firebase_auth(req: FirebaseVerifyRequest, request: Request, db: Sessi
 
     # SQC 1 Audit Log
     try:
-        stmt = (
-            select(AuditBlock)
-            .where(AuditBlock.firm_id == user.firm_id)
-            .order_by(AuditBlock.sequence.desc())
-            .limit(1)
-        )
-        last_block = db.execute(stmt).scalar_one_or_none()
-        new_sequence = (last_block.sequence + 1) if last_block else 1
-        prev_hash = last_block.block_hash if last_block else GENESIS_HASH
-
-        now_utc = datetime.now(timezone.utc)
         payload = {
             "auth_method": "FIREBASE_PHONE_AUTH",
             "firebase_uid": firebase_uid,
@@ -368,32 +324,11 @@ def verify_firebase_auth(req: FirebaseVerifyRequest, request: Request, db: Sessi
             "client_ip": request.client.host if request.client else "unknown",
             "user_agent": request.headers.get("user-agent", "unknown")
         }
-        b_hash = compute_block_hash(
-            sequence=new_sequence,
-            prev_hash=prev_hash,
-            actor_id=str(user.id),
-            actor_role=user.role,
-            action="FIREBASE_AUTH_VERIFIED",
-            entity_type="USER_SESSION",
-            entity_id=str(user.id),
-            payload=payload,
-            timestamp=now_utc.isoformat()
+        # Single canonical writer: login blocks must hash exactly like every other block,
+        # otherwise the chain verifier reports tampering after the first login.
+        append_audit_block(
+            db, user.firm_id, str(user.id), user.role, "FIREBASE_AUTH_VERIFIED", "USER_SESSION", str(user.id), payload
         )
-        audit_block = AuditBlock(
-            firm_id=user.firm_id,
-            sequence=new_sequence,
-            prev_hash=prev_hash,
-            block_hash=b_hash,
-            actor_id=str(user.id),
-            actor_role=user.role,
-            action="FIREBASE_AUTH_VERIFIED",
-            entity_type="USER_SESSION",
-            entity_id=str(user.id),
-            payload_json=payload,
-            timestamp=now_utc
-        )
-        db.add(audit_block)
-        db.commit()
     except Exception as e:
         logger.warning(f"Audit block logging non-blocking error: {e}")
 
@@ -406,12 +341,12 @@ def verify_firebase_auth(req: FirebaseVerifyRequest, request: Request, db: Sessi
         "full_name": user.full_name,
         "membership_no": user.membership_no
     }
-    jwt_token = create_access_token(data=token_claims, expires_delta=timedelta(days=7))
+    jwt_token = create_access_token(data=token_claims, expires_delta=timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES))
 
     return AuthResponse(
         access_token=jwt_token,
         token_type="bearer",
-        expires_in_minutes=7 * 24 * 60,
+        expires_in_minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES,
         user=UserProfileResponse(
             id=str(user.id),
             firm_id=str(user.firm_id),

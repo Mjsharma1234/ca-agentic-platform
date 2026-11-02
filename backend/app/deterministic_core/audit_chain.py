@@ -34,9 +34,17 @@ def append_audit_block(
     action: str,
     entity_type: str,
     entity_id: str,
-    payload: Dict[str, Any]
+    payload: Dict[str, Any],
+    commit: bool = True,
 ) -> AuditBlock:
-    """Appends a new immutable block to the firm's cryptographic audit chain."""
+    """Appends a new immutable block to the firm's cryptographic audit chain.
+
+    With commit=False the block is only flushed, so a caller can persist its state change and
+    the audit block in ONE transaction (no state without evidence, no evidence without state).
+    The firm row is locked (SELECT ... FOR UPDATE on PostgreSQL) so concurrent writers serialise
+    instead of forking the chain; (firm_id, sequence) is additionally unique at the DB level.
+    """
+    db.execute(select(Firm.id).where(Firm.id == firm_id).with_for_update())
     # Find latest block for this firm
     stmt = (
         select(AuditBlock)
@@ -81,8 +89,11 @@ def append_audit_block(
         timestamp=now
     )
     db.add(block)
-    db.commit()
-    db.refresh(block)
+    if commit:
+        db.commit()
+        db.refresh(block)
+    else:
+        db.flush()
     return block
 
 def verify_firm_audit_chain(db: Session, firm_id: uuid.UUID) -> Dict[str, Any]:

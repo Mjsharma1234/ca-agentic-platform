@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 from ...core.config import settings
 from ...core.database import get_db
 from ...deterministic_core import dsc_signing as dsc
+from ...deterministic_core.dsc_revocation import check_revocation
 from ...deterministic_core.audit_chain import append_audit_block
 from ...models.returns import GSTReturn, ReturnStatus
 from ...models.signing import DSCCertificate, DSCCertStatus, SigningRequest, SigningStatus
@@ -49,11 +50,20 @@ def _aware(dt: datetime) -> datetime:
 
 
 def _trusted_issuer():
-    path = os.getenv("DSC_TRUSTED_CA_PEM_PATH")
+    path = settings.DSC_TRUSTED_CA_PEM_PATH or os.getenv("DSC_TRUSTED_CA_PEM_PATH")
     if not path:
         return None
     with open(path, "r", encoding="utf-8") as fh:
         return dsc.load_certificate(fh.read())
+
+
+def _check_certificate(cert) -> None:
+    """Structural validation, trust-anchor check and CRL revocation check (policy: DSC_REVOCATION_MODE)."""
+    issuer = _trusted_issuer()
+    dsc.validate_certificate(cert, trusted_issuer=issuer)
+    check_revocation(
+        cert, issuer=issuer, mode=settings.DSC_REVOCATION_MODE, cache_seconds=settings.DSC_CRL_CACHE_SECONDS
+    )
 
 
 def _public(req: SigningRequest) -> Dict[str, Any]:
@@ -111,7 +121,7 @@ def register_certificate(
     """Register the PUBLIC certificate of the calling partner's Class-3 DSC."""
     try:
         cert = dsc.load_certificate(body.certificate_pem)
-        dsc.validate_certificate(cert, trusted_issuer=_trusted_issuer())
+        _check_certificate(cert)
     except dsc.CertificateError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 
@@ -133,12 +143,13 @@ def register_certificate(
         certificate_pem=body.certificate_pem.strip(),
     )
     db.add(row)
-    db.commit()
-    db.refresh(row)
+    db.flush()
     append_audit_block(
         db, user.tenant_id, str(user.id), user.role, "DSC_CERTIFICATE_REGISTERED",
-        "DSC_CERTIFICATE", str(row.id), {"fingerprint": fp, "serial": serial},
+        "DSC_CERTIFICATE", str(row.id), {"fingerprint": fp, "serial": serial}, commit=False,
     )
+    db.commit()
+    db.refresh(row)
     return {"id": str(row.id), "fingerprint_sha256": fp, "subject": subject, "not_after": row.not_after.isoformat()}
 
 
@@ -177,11 +188,11 @@ def revoke_certificate(
         raise HTTPException(status_code=404, detail="Certificate not found.")
     row.status = DSCCertStatus.REVOKED
     row.revoked_at = _utcnow()
-    db.commit()
     append_audit_block(
         db, user.tenant_id, str(user.id), user.role, "DSC_CERTIFICATE_REVOKED",
-        "DSC_CERTIFICATE", str(row.id), {"fingerprint": row.fingerprint_sha256},
+        "DSC_CERTIFICATE", str(row.id), {"fingerprint": row.fingerprint_sha256}, commit=False,
     )
+    db.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -265,13 +276,55 @@ def create_signing_request(
         expires_at=_utcnow() + timedelta(seconds=settings.SIGNING_REQUEST_TTL_SECONDS),
     )
     db.add(req)
-    db.commit()
-    db.refresh(req)
+    db.flush()
     append_audit_block(
         db, user.tenant_id, str(user.id), user.role, "SIGNING_REQUESTED", "SIGNING_REQUEST", str(req.id),
         {"entity": f"{body.entity_type}:{body.entity_id}", "document_hash": body.document_hash, "signer_id": str(signer.id)},
+        commit=False,
     )
+    db.commit()
+    db.refresh(req)
     return _public(req)
+
+
+@router.get("/prepare")
+def prepare_signing(
+    entity_type: str,
+    entity_id: str,
+    user: Annotated[User, Depends(require_role("MANAGER"))],
+    db: Session = Depends(get_db),
+):
+    """What a reviewer needs to open a request: the server-held document hash, a label, and the
+    partners who may sign. The hash comes from the stored return — the browser never supplies it."""
+    if entity_type != "GST_RETURN":
+        raise HTTPException(status_code=422, detail="Only GST_RETURN documents can be prepared here.")
+    try:
+        ret_id = uuid.UUID(entity_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="entity_id must be a UUID.")
+    from ...models.clients import Client
+    ret = db.execute(
+        select(GSTReturn).where(GSTReturn.id == ret_id, GSTReturn.tenant_id == user.tenant_id)
+    ).scalar_one_or_none()
+    if ret is None or not ret.payload_hash:
+        raise HTTPException(status_code=404, detail="Return not found or has no assembled payload.")
+    client = db.get(Client, ret.client_id)
+    partners = db.execute(
+        select(UserModel).where(UserModel.firm_id == user.tenant_id, UserModel.is_active.is_(True))
+    ).scalars().all()
+    eligible = [
+        {"id": str(p.id), "full_name": p.full_name}
+        for p in partners
+        if ROLE_HIERARCHY.get((p.role or "").upper(), 0) >= ROLE_HIERARCHY["PARTNER"] and p.id != ret.preparer_id
+    ]
+    return {
+        "entity_type": entity_type,
+        "entity_id": str(ret.id),
+        "document_hash": ret.payload_hash,
+        "document_label": f"{ret.return_type.value} {ret.period} — {client.client_name if client else 'client'}",
+        "return_status": ret.status.value,
+        "eligible_signers": eligible,
+    }
 
 
 def _challenge(req: SigningRequest) -> Dict[str, Any]:
@@ -348,16 +401,16 @@ def complete_request(
         req.failure_reason = reason[:300]
         if req.attempts >= MAX_ATTEMPTS:
             req.status = SigningStatus.FAILED
-        db.commit()
         append_audit_block(
             db, user.tenant_id, str(user.id), user.role, "SIGNING_REJECTED_BY_SERVER", "SIGNING_REQUEST",
-            str(req.id), {"reason": reason, "attempts": req.attempts},
+            str(req.id), {"reason": reason, "attempts": req.attempts}, commit=False,
         )
+        db.commit()
         raise HTTPException(status_code=code, detail=reason)
 
     try:
         cert = dsc.load_certificate(body.certificate_pem)
-        dsc.validate_certificate(cert, trusted_issuer=_trusted_issuer())
+        _check_certificate(cert)
     except dsc.CertificateError as exc:
         _fail(str(exc))
 
@@ -390,7 +443,7 @@ def complete_request(
     req.signature_b64 = body.signature_b64
     req.cert_fingerprint = fp
     req.signed_at = now
-    req.signer_device = body.signer_device
+    req.signer_device = user.device_id or body.signer_device  # server-known device wins over client-claimed label
     req.failure_reason = None
 
     if req.entity_type == "GST_RETURN":
@@ -403,14 +456,15 @@ def complete_request(
         if ret is not None and ret.payload_hash == req.document_hash:
             ret.status = ReturnStatus.SIGNED
             ret.signing_partner_id = user.id
-    db.commit()
 
+    # One transaction: signature, return state and its audit block commit together or not at all.
     block = append_audit_block(
         db, user.tenant_id, str(user.id), user.role, "DSC_SIGNED", "SIGNING_REQUEST", str(req.id),
         {
             "entity": f"{req.entity_type}:{req.entity_id}", "document_hash": req.document_hash,
-            "cert_fingerprint": fp, "signer_device": body.signer_device, "gate_id": req.gate_id,
+            "cert_fingerprint": fp, "signer_device": user.device_id or body.signer_device, "gate_id": req.gate_id,
         },
+        commit=False,
     )
     req.audit_block_hash = block.block_hash
     db.commit()
@@ -435,9 +489,9 @@ def reject_request(
         raise HTTPException(status_code=409, detail=f"Signing request is {req.status.value}.")
     req.status = SigningStatus.REJECTED
     req.failure_reason = body.reason
-    db.commit()
     append_audit_block(
         db, user.tenant_id, str(user.id), user.role, "SIGNING_REJECTED_BY_PARTNER", "SIGNING_REQUEST",
-        str(req.id), {"reason": body.reason},
+        str(req.id), {"reason": body.reason}, commit=False,
     )
+    db.commit()
     return _public(req)

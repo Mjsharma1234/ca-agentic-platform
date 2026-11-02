@@ -8,4 +8,4 @@ from .gates import GateDecision, ObligationState
 from .firm_os import FirmStateModel, ObligationItem, NoticeItem, DaybookEntry, GateApprovalLog
 from .tenant import Firm, User, AuditBlock, FirmConstitution, PlanTier, UserRole
 from .otp import OTPRecord
-from .signing import DSCCertificate, SigningRequest, DSCCertStatus, SigningStatus
+from .signing import DSCCertificate, SigningRequest, DSCCertStatus, SigningStatus, DeviceAuthorization, SignerDevice, DeviceGrantStatus

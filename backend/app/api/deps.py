@@ -1,7 +1,10 @@
 import os
+import re
+from datetime import datetime, timezone
 from typing import Generator, Annotated, Optional
 from fastapi import Depends, HTTPException, status, Header, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 import uuid
 import jwt
@@ -21,7 +24,9 @@ class User:
         email: str = "",
         full_name: str = "",
         phone: Optional[str] = None,
-        membership_no: Optional[str] = None
+        membership_no: Optional[str] = None,
+        scope: Optional[str] = None,
+        device_id: Optional[str] = None,
     ):
         self.id = uuid.UUID(str(id)) if not isinstance(id, uuid.UUID) else id
         self.tenant_id = uuid.UUID(str(tenant_id)) if not isinstance(tenant_id, uuid.UUID) else tenant_id
@@ -30,8 +35,44 @@ class User:
         self.full_name = full_name
         self.phone = phone
         self.membership_no = membership_no
+        self.scope = scope
+        self.device_id = device_id
+
+SIGNER_ALLOWED = re.compile(
+    r"^/api/v1/signing/(requests/pending|requests/[0-9a-fA-F-]{36}|requests/[0-9a-fA-F-]{36}/(complete|reject))/?$"
+)
+
+
+def _authorise_signer_token(payload: dict, request: Request, db: Session) -> "User":
+    """Desktop-signer tokens are scoped: only the signing endpoints, only while the device is
+    approved and the partner is still an active Partner (role is re-read, not trusted from the token)."""
+    from ..models.signing import SignerDevice
+    from ..models.tenant import User as UserModel
+
+    if not SIGNER_ALLOWED.match(request.url.path):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Signer tokens are limited to the signing API.")
+    try:
+        device_id = uuid.UUID(str(payload.get("did")))
+        user_id = uuid.UUID(str(payload.get("sub")))
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token claims.")
+    device = db.execute(select(SignerDevice).where(SignerDevice.id == device_id)).scalar_one_or_none()
+    if device is None or device.revoked_at is not None or device.user_id != user_id:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="This signer device is no longer authorised.")
+    row = db.execute(select(UserModel).where(UserModel.id == user_id)).scalar_one_or_none()
+    if row is None or not row.is_active or str(row.firm_id) != str(payload.get("tenant_id")):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Account is not active.")
+    device.last_seen_at = datetime.now(timezone.utc)
+    db.commit()
+    return User(
+        id=row.id, tenant_id=row.firm_id, role=row.role, email=row.email, full_name=row.full_name,
+        membership_no=row.membership_no, scope="signer", device_id=str(device.id),
+    )
+
 
 def get_current_user(
+    request: Request,
+    db: Session = Depends(get_db),
     auth: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
     x_user_id: Optional[str] = Header(None),
     x_tenant_id: Optional[str] = Header(None),
@@ -51,6 +92,8 @@ def get_current_user(
             
             if not user_id or not tenant_id or not role:
                 raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token claims.")
+            if payload.get("scope") == "signer":
+                return _authorise_signer_token(payload, request, db)
 
             email = payload.get("email", "")
             full_name = payload.get("full_name", "")
@@ -109,6 +152,8 @@ ROLE_HIERARCHY = {
 }
 
 def get_optional_current_user(
+    request: Request,
+    db: Session = Depends(get_db),
     auth: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
     x_user_id: Optional[str] = Header(None),
     x_tenant_id: Optional[str] = Header(None),
@@ -116,7 +161,7 @@ def get_optional_current_user(
 ) -> Optional[User]:
     """Resolves authenticated user if credentials are provided; returns None otherwise without raising 401."""
     try:
-        return get_current_user(auth, x_user_id, x_tenant_id, x_user_role)
+        return get_current_user(request, db, auth, x_user_id, x_tenant_id, x_user_role)
     except HTTPException:
         return None
 
@@ -132,3 +177,10 @@ def require_role(required_role: str):
             )
         return current_user
     return role_checker
+
+
+def interactive_user(current_user: Annotated[User, Depends(get_current_user)]) -> User:
+    """A person's browser session — never a desktop-signer token (used for device management)."""
+    if current_user.scope == "signer":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not available to signer tokens.")
+    return current_user

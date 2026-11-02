@@ -15,6 +15,15 @@ class Settings(BaseSettings):
     AUTO_CREATE_TABLES: Optional[bool] = None
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 480
     SIGNING_REQUEST_TTL_SECONDS: int = 300
+    # DSC trust & revocation (see app/deterministic_core/dsc_revocation.py)
+    DSC_TRUSTED_CA_PEM_PATH: Optional[str] = None
+    DSC_REVOCATION_MODE: str = "soft"          # off | soft | strict
+    DSC_CRL_CACHE_SECONDS: int = 3600
+    # Desktop signer device grant
+    SIGNER_ACCESS_TOKEN_MINUTES: int = 15
+    SIGNER_REFRESH_DAYS: int = 30
+    DEVICE_CODE_TTL_SECONDS: int = 600
+    PUBLIC_WEB_URL: str = "http://localhost:3000"
     APP_NAME: str = "CA Agentic Compliance Platform"
     DEBUG: bool = True
     CORS_ORIGINS: List[str] = ["*"]
@@ -42,6 +51,8 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _fail_closed_in_production(self):
+        if self.DSC_REVOCATION_MODE not in ("off", "soft", "strict"):
+            raise ValueError("DSC_REVOCATION_MODE must be off, soft or strict.")
         if not self.DEBUG:
             if self.SECRET_KEY == INSECURE_DEFAULT_SECRET or len(self.SECRET_KEY) < 32:
                 raise ValueError(

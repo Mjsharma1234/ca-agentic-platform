@@ -1,111 +1,86 @@
 "use client";
 
-import React, { createContext, useContext, useState, useEffect } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
-import { api } from "./api";
+import { api, UNAUTHORIZED_EVENT } from "./api";
+import type { AuthUser, Role } from "./types";
 
-export interface AuthUser {
-  id: string;
-  firm_id: string;
-  full_name: string;
-  email: string;
-  phone?: string;
-  role: "PARTNER" | "SENIOR_MANAGER" | "MANAGER" | "ARTICLE_TRAINEE" | "CLIENT_USER" | string;
-  membership_no?: string;
+export type { AuthUser } from "./types";
+
+/** Mirrors backend ROLE_HIERARCHY so the UI hides what the API would refuse (the API stays authoritative). */
+export const ROLE_LEVEL: Record<string, number> = {
+  CLIENT_USER: 0, ARTICLE_TRAINEE: 1, REVIEWER: 2, MANAGER: 3, SENIOR_MANAGER: 4, PARTNER: 5,
+};
+
+export function hasRole(user: AuthUser | null, minimum: Role): boolean {
+  return !!user && (ROLE_LEVEL[user.role] ?? 0) >= ROLE_LEVEL[minimum];
 }
 
 interface AuthContextType {
   user: AuthUser | null;
-  token: string | null;
   isLoading: boolean;
-  login: (token: string, user: AuthUser) => void;
-  logout: () => void;
+  login: (user: AuthUser) => void;
+  logout: () => Promise<void>;
   refreshUser: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType>({
   user: null,
-  token: null,
   isLoading: true,
   login: () => {},
-  logout: () => {},
+  logout: async () => {},
   refreshUser: async () => {},
 });
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
-  const [token, setToken] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [isLoading, setIsLoading] = useState(true);
   const router = useRouter();
   const pathname = usePathname();
 
-  useEffect(() => {
-    // Check localStorage for existing session
-    if (typeof window !== "undefined") {
-      const storedToken = localStorage.getItem("ca_token");
-      const storedUser = localStorage.getItem("ca_user");
-
-      if (storedToken && storedUser) {
-        try {
-          setToken(storedToken);
-          setUser(JSON.parse(storedUser));
-        } catch (e) {
-          console.error("Failed to parse cached user", e);
-          localStorage.removeItem("ca_token");
-          localStorage.removeItem("ca_user");
-        }
-      } else {
-        // Default to demo Partner user if none exists so users can browse without mandatory initial gate
-        const defaultUser: AuthUser = {
-          id: "00000000-0000-0000-0000-000000000002",
-          firm_id: "00000000-0000-0000-0000-000000000001",
-          full_name: "CA Amit Sharma, FCA",
-          email: "partner@cafirm.in",
-          phone: "+919876543210",
-          role: "PARTNER",
-          membership_no: "ICAI-FCA-504912"
-        };
-        setUser(defaultUser);
-      }
-      setIsLoading(false);
-    }
+  const refreshUser = useCallback(async () => {
+    const { data } = await api.getMe();
+    setUser(data);
   }, []);
 
-  const login = (newToken: string, newUser: AuthUser) => {
-    setToken(newToken);
-    setUser(newUser);
-    if (typeof window !== "undefined") {
-      localStorage.setItem("ca_token", newToken);
-      localStorage.setItem("ca_user", JSON.stringify(newUser));
-    }
-    router.push("/");
-  };
-
-  const logout = () => {
-    setToken(null);
-    setUser(null);
-    if (typeof window !== "undefined") {
+  // The session lives in an httpOnly cookie; ask the API who we are instead of trusting browser storage.
+  useEffect(() => {
+    try {
+      // Purge any token/user cached by earlier builds that kept them in localStorage.
       localStorage.removeItem("ca_token");
       localStorage.removeItem("ca_user");
+    } catch {
+      /* storage unavailable */
     }
+    refreshUser().finally(() => setIsLoading(false));
+  }, [refreshUser]);
+
+  useEffect(() => {
+    const onUnauthorized = () => {
+      setUser(null);
+      if (window.location.pathname !== "/login") router.replace("/login");
+    };
+    window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
+    return () => window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
+  }, [router]);
+
+  useEffect(() => {
+    if (!isLoading && !user && pathname !== "/login") router.replace("/login");
+  }, [isLoading, user, pathname, router]);
+
+  const login = (next: AuthUser) => {
+    setUser(next);
+    const target = new URLSearchParams(window.location.search).get("next");
+    router.push(target && target.startsWith("/") && !target.startsWith("//") ? target : "/");
+  };
+
+  const logout = async () => {
+    await api.logout();
+    setUser(null);
     router.push("/login");
   };
 
-  const refreshUser = async () => {
-    const { data } = await api.getMe();
-    if (data) {
-      setUser(data);
-      if (typeof window !== "undefined") {
-        localStorage.setItem("ca_user", JSON.stringify(data));
-      }
-    }
-  };
-
-  return (
-    <AuthContext.Provider value={{ user, token, isLoading, login, logout, refreshUser }}>
-      {children}
-    </AuthContext.Provider>
-  );
+  return <AuthContext.Provider value={{ user, isLoading, login, logout, refreshUser }}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth() {

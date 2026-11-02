@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 from enum import Enum
-from sqlalchemy import Column, String, Boolean, DateTime, JSON, Integer, Text, ForeignKey
+from sqlalchemy import Column, String, Boolean, DateTime, JSON, Integer, Text, ForeignKey, UniqueConstraint
 from sqlalchemy.orm import relationship
 
 from .base import BaseModel, GUID
@@ -66,6 +66,7 @@ class AuditBlock(Base):
     Maintains a SHA-256 hash chain where each block's integrity verifies the prior block.
     """
     __tablename__ = "audit_blocks"
+    __table_args__ = (UniqueConstraint("firm_id", "sequence", name="uq_audit_blocks_firm_sequence"),)
 
     id = Column(GUID, primary_key=True, default=uuid.uuid4, index=True)
     firm_id = Column(GUID, ForeignKey("firms.id"), nullable=False, index=True)

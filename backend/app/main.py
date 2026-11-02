@@ -20,6 +20,7 @@ from .api.v1.billing import router as billing_router
 from .api.v1.bank_reco import router as bank_reco_router
 from .api.v1.auth import router as auth_router
 from .api.v1.signing import router as signing_router
+from .api.v1.signer_devices import router as signer_devices_router
 
 # Pre-initialize database tables synchronously
 create_tables()
@@ -77,6 +78,7 @@ api_router.include_router(billing_router)
 api_router.include_router(bank_reco_router)
 api_router.include_router(auth_router)
 api_router.include_router(signing_router)
+api_router.include_router(signer_devices_router)
 
 @api_router.get("/health")
 async def health_check_v1():

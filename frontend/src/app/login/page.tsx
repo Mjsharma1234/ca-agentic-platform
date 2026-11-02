@@ -177,7 +177,7 @@ export default function LoginPage() {
         }
 
         setSuccessMsg("Firebase phone verification successful! Launching workspace...");
-        login(data.access_token, data.user as AuthUser);
+        login(data.user as AuthUser);
         return;
       } catch (fbErr: any) {
         console.warn("Firebase confirm error, trying direct verification fallback:", fbErr.message);
@@ -193,7 +193,7 @@ export default function LoginPage() {
     }
 
     setSuccessMsg("Verification successful! Initializing secure session...");
-    login(data.access_token, data.user as AuthUser);
+    login(data.user as AuthUser);
   };
 
   const autoFillDevOtp = () => {

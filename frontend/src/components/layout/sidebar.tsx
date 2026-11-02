@@ -7,7 +7,7 @@ import {
   LayoutDashboard, 
   Users, 
   FileText, 
-  ShieldAlert, 
+  ShieldAlert, ShieldCheck, 
   Briefcase, 
   Calendar,
   AlertTriangle,
@@ -29,6 +29,7 @@ const navItems = [
   { href: "/gates", label: "Gates Hub", icon: ShieldAlert },
   { href: "/returns", label: "Returns", icon: Briefcase },
   { href: "/calendar", label: "Calendar", icon: Calendar },
+  { href: "/device", label: "Signer Devices", icon: ShieldCheck },
 ];
 
 export function Sidebar() {

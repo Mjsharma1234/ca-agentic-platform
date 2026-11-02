@@ -69,3 +69,36 @@ class SigningRequest(BaseModel):
     attempts = Column(Integer, default=0, nullable=False)
     failure_reason = Column(String(300), nullable=True)
     audit_block_hash = Column(String(64), nullable=True)
+
+
+class DeviceGrantStatus(str, enum.Enum):
+    PENDING = "PENDING"
+    APPROVED = "APPROVED"
+    DENIED = "DENIED"
+    CONSUMED = "CONSUMED"
+
+
+class DeviceAuthorization(BaseModel):
+    """RFC 8628 device authorization request. Only a hash of the device_code is stored."""
+    __tablename__ = "device_authorizations"
+
+    device_code_hash = Column(String(64), nullable=False, unique=True)
+    user_code = Column(String(12), nullable=False, index=True)
+    device_name = Column(String(120), nullable=False)
+    status = Column(Enum(DeviceGrantStatus), default=DeviceGrantStatus.PENDING, nullable=False)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    approved_user_id = Column(UUID(as_uuid=True), nullable=True)
+    last_polled_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class SignerDevice(BaseModel):
+    """An approved desktop signer. Tokens carry its id; revoking the row kills them at once."""
+    __tablename__ = "signer_devices"
+
+    user_id = Column(UUID(as_uuid=True), nullable=False, index=True)
+    device_name = Column(String(120), nullable=False)
+    refresh_hash = Column(String(64), nullable=False, unique=True)   # rotated on every refresh
+    previous_refresh_hash = Column(String(64), nullable=True)         # reuse of this => theft => revoke
+    refresh_expires_at = Column(DateTime(timezone=True), nullable=False)
+    last_seen_at = Column(DateTime(timezone=True), nullable=True)
+    revoked_at = Column(DateTime(timezone=True), nullable=True)
