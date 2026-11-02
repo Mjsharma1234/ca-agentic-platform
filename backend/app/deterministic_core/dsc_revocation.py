@@ -1,5 +1,6 @@
 """CRL-based revocation checking for registered DSC certificates.
 
+Order: OCSP first (when enabled and the certificate has an AIA OCSP responder), then the CRL.
 Policy (settings.DSC_REVOCATION_MODE):
   off    - never check.
   soft   - a certificate listed as revoked is always refused; if revocation status cannot be
@@ -15,20 +16,28 @@ import logging
 import socket
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Callable, Dict, Optional, Tuple
 from urllib.parse import urlparse
 
 from cryptography import x509
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa
+from cryptography.x509 import ocsp
+from cryptography.x509.oid import AuthorityInformationAccessOID, ExtendedKeyUsageOID
 
 from .dsc_signing import CertificateError
 
 logger = logging.getLogger("dsc.revocation")
 
 MAX_CRL_BYTES = 5 * 1024 * 1024
+MAX_OCSP_BYTES = 1024 * 1024
 FETCH_TIMEOUT_SECONDS = 5.0
 
 Fetcher = Callable[[str], bytes]
+OcspPoster = Callable[[str, bytes], bytes]
+_ocsp_cache: Dict[Tuple[str, int], float] = {}
 _cache: Dict[str, Tuple[float, x509.CertificateRevocationList]] = {}
 _lock = threading.Lock()
 
@@ -56,6 +65,96 @@ def default_fetch(url: str) -> bytes:
                 if len(data) > MAX_CRL_BYTES:
                     raise ValueError("CRL exceeds size limit.")
             return data
+
+
+def default_ocsp_post(url: str, body: bytes) -> bytes:
+    import httpx
+
+    _assert_public_http_url(url)
+    headers = {"Content-Type": "application/ocsp-request", "Accept": "application/ocsp-response"}
+    with httpx.Client(timeout=FETCH_TIMEOUT_SECONDS, follow_redirects=False) as client:
+        with client.stream("POST", url, content=body, headers=headers) as resp:
+            resp.raise_for_status()
+            data = b""
+            for chunk in resp.iter_bytes():
+                data += chunk
+                if len(data) > MAX_OCSP_BYTES:
+                    raise ValueError("OCSP response exceeds size limit.")
+            return data
+
+
+def _ocsp_urls(cert: x509.Certificate):
+    try:
+        aia = cert.extensions.get_extension_for_class(x509.AuthorityInformationAccess).value
+    except x509.ExtensionNotFound:
+        return []
+    return [
+        d.access_location.value
+        for d in aia
+        if d.access_method == AuthorityInformationAccessOID.OCSP
+        and isinstance(d.access_location, x509.UniformResourceIdentifier)
+    ]
+
+
+def _verify_with_key(public_key, signature: bytes, data: bytes, hash_alg) -> None:
+    if isinstance(public_key, rsa.RSAPublicKey):
+        public_key.verify(signature, data, padding.PKCS1v15(), hash_alg)
+    elif isinstance(public_key, ec.EllipticCurvePublicKey):
+        public_key.verify(signature, data, ec.ECDSA(hash_alg))
+    else:
+        raise InvalidSignature("unsupported responder key type")
+
+
+def _responder_key(resp: ocsp.OCSPResponse, issuer: x509.Certificate, now: datetime):
+    """The CA itself, or a delegated responder certificate it issued with the OCSP-signing EKU."""
+    for candidate in resp.certificates:
+        try:
+            candidate.verify_directly_issued_by(issuer)
+            eku = candidate.extensions.get_extension_for_class(x509.ExtendedKeyUsage).value
+        except (ValueError, TypeError, InvalidSignature, x509.ExtensionNotFound):
+            continue
+        if ExtendedKeyUsageOID.OCSP_SIGNING in eku and candidate.not_valid_before_utc <= now <= candidate.not_valid_after_utc:
+            return candidate.public_key()
+    return issuer.public_key()
+
+
+def _ocsp_check(cert, issuer, url, post, cache_seconds, now) -> str:
+    """'good' or 'unknown'; raises CertificateError when the certifying authority says revoked."""
+    key = (url, cert.serial_number)
+    with _lock:
+        cached = _ocsp_cache.get(key)
+    if cached and time.time() - cached < cache_seconds:
+        return "good"
+    request = ocsp.OCSPRequestBuilder().add_certificate(cert, issuer, hashes.SHA1()).build()  # RFC 6960 CertID uses SHA-1
+    try:
+        resp = ocsp.load_der_ocsp_response(post(url, request.public_bytes(serialization.Encoding.DER)))
+    except Exception as exc:  # noqa: BLE001 - network/parse failures are "unknown", not fatal
+        logger.warning("OCSP request to %s failed: %s", url, exc)
+        return "unknown"
+    if resp.response_status != ocsp.OCSPResponseStatus.SUCCESSFUL:
+        logger.warning("OCSP responder %s answered %s", url, resp.response_status.name)
+        return "unknown"
+    try:
+        _verify_with_key(
+            _responder_key(resp, issuer, now), resp.signature, resp.tbs_response_bytes, resp.signature_hash_algorithm
+        )
+    except (InvalidSignature, ValueError, TypeError):
+        logger.warning("OCSP response from %s failed signature verification", url)
+        return "unknown"
+    if resp.serial_number != cert.serial_number:
+        return "unknown"
+    if resp.this_update_utc > now + timedelta(minutes=5) or (
+        resp.next_update_utc is not None and resp.next_update_utc < now
+    ):
+        logger.warning("OCSP response from %s is not current", url)
+        return "unknown"
+    if resp.certificate_status == ocsp.OCSPCertStatus.REVOKED:
+        raise CertificateError("Certificate has been revoked by its certifying authority.")
+    if resp.certificate_status != ocsp.OCSPCertStatus.GOOD:
+        return "unknown"
+    with _lock:
+        _ocsp_cache[key] = time.time()
+    return "good"
 
 
 def _distribution_points(cert: x509.Certificate):
@@ -86,6 +185,9 @@ def check_revocation(
     cache_seconds: int = 3600,
     fetch: Optional[Fetcher] = None,
     now: Optional[datetime] = None,
+    ocsp_enabled: bool = False,
+    ocsp_cache_seconds: int = 300,
+    ocsp_post: Optional[OcspPoster] = None,
 ) -> str:
     """Returns 'good', 'skipped' or 'unknown'. Raises CertificateError when the cert must be refused."""
     if mode == "off":
@@ -101,9 +203,14 @@ def check_revocation(
 
     if issuer is None:
         return unknown("no trusted issuer configured to verify CRLs")
+    if ocsp_enabled:
+        post = ocsp_post or default_ocsp_post  # resolved at call time (swappable in tests/deployments)
+        for responder in _ocsp_urls(cert):
+            if _ocsp_check(cert, issuer, responder, post, ocsp_cache_seconds, now) == "good":
+                return "good"
     urls = _distribution_points(cert)
     if not urls:
-        return unknown("certificate has no CRL distribution point")
+        return unknown("no OCSP or CRL answer (certificate has no usable revocation endpoint)")
 
     for url in urls:
         crl = None
@@ -133,3 +240,4 @@ def check_revocation(
 def clear_cache() -> None:
     with _lock:
         _cache.clear()
+        _ocsp_cache.clear()

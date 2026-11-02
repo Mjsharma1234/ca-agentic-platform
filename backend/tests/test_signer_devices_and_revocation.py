@@ -29,6 +29,7 @@ def fresh_state(monkeypatch):
     monkeypatch.setattr(signer_devices, "POLL_INTERVAL_SECONDS", 0)  # tests poll instantly
     monkeypatch.setattr(settings, "DSC_TRUSTED_CA_PEM_PATH", None)
     monkeypatch.setattr(settings, "DSC_REVOCATION_MODE", "soft")
+    monkeypatch.setattr(settings, "SIGNER_REQUIRE_DPOP", False)  # DPoP is covered in test_dpop_ocsp_hardening.py
     yield
     signer_devices.reset_rate_limits()
 

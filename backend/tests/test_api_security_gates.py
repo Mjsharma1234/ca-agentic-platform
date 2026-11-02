@@ -411,7 +411,8 @@ def test_production_config_fails_closed():
         Settings(DEBUG=False)  # default secret
     with pytest.raises(ValueError):
         Settings(DEBUG=False, SECRET_KEY="x" * 40)  # OTP sandbox still on
-    Settings(DEBUG=False, SECRET_KEY="x" * 40, OTP_SANDBOX_MODE=False)
+    with pytest.raises(ValueError, match="trust anchor"):
+        Settings(DEBUG=False, SECRET_KEY="x" * 40, OTP_SANDBOX_MODE=False)  # no DSC CA configured
 
 
 def test_server_side_pin_signing_disabled_in_production(env, monkeypatch):

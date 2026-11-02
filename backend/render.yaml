@@ -15,3 +15,14 @@ services:
         generateValue: true
       - key: DATABASE_URL
         sync: false
+      # Required in production: the app refuses to start until these are set.
+      - key: DSC_TRUSTED_CA_PEM        # PEM of the certifying authority that issues partner DSCs
+        sync: false
+      - key: PUBLIC_API_URL            # https URL of this service, e.g. https://ca-agentic-backend.onrender.com
+        sync: false
+      - key: PUBLIC_WEB_URL            # https URL of the web app
+        sync: false
+      - key: DSC_REVOCATION_MODE
+        value: strict
+      - key: SHARED_STORE_URL          # optional Redis (shared rate limits / DPoP replay cache)
+        sync: false

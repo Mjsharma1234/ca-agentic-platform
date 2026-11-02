@@ -102,3 +102,4 @@ class SignerDevice(BaseModel):
     refresh_expires_at = Column(DateTime(timezone=True), nullable=False)
     last_seen_at = Column(DateTime(timezone=True), nullable=True)
     revoked_at = Column(DateTime(timezone=True), nullable=True)
+    dpop_jkt = Column(String(64), nullable=True)  # RFC 7638 thumbprint of the signer's DPoP key

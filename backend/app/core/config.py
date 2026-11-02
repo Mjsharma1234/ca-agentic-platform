@@ -17,13 +17,23 @@ class Settings(BaseSettings):
     SIGNING_REQUEST_TTL_SECONDS: int = 300
     # DSC trust & revocation (see app/deterministic_core/dsc_revocation.py)
     DSC_TRUSTED_CA_PEM_PATH: Optional[str] = None
+    DSC_TRUSTED_CA_PEM: Optional[str] = None   # inline PEM alternative to the path (handy for PaaS env vars)
     DSC_REVOCATION_MODE: str = "soft"          # off | soft | strict
     DSC_CRL_CACHE_SECONDS: int = 3600
+    DSC_OCSP_ENABLED: bool = True              # try OCSP first, fall back to the CRL
+    DSC_OCSP_CACHE_SECONDS: int = 300
     # Desktop signer device grant
     SIGNER_ACCESS_TOKEN_MINUTES: int = 15
     SIGNER_REFRESH_DAYS: int = 30
     DEVICE_CODE_TTL_SECONDS: int = 600
     PUBLIC_WEB_URL: str = "http://localhost:3000"
+    # Public base URL of this API as the signer sees it (scheme+host, no path). DPoP proofs are bound
+    # to it, so it must be set behind a TLS-terminating proxy; when unset the request URL is used.
+    PUBLIC_API_URL: Optional[str] = None
+    SIGNER_REQUIRE_DPOP: bool = True           # RFC 9449 sender-constrained signer tokens
+    # Optional Redis URL shared by all workers for rate limits and DPoP replay protection.
+    # Unset (or unreachable) => per-process in-memory fallback.
+    SHARED_STORE_URL: Optional[str] = None
     APP_NAME: str = "CA Agentic Compliance Platform"
     DEBUG: bool = True
     CORS_ORIGINS: List[str] = ["*"]
@@ -62,7 +72,26 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "OTP_SANDBOX_MODE must be false when DEBUG is false: sandbox mode returns OTPs in API responses."
                 )
+            self._require_dsc_trust_anchor()
+            if self.DSC_REVOCATION_MODE == "off":
+                raise ValueError("DSC_REVOCATION_MODE must be soft or strict when DEBUG is false.")
+            if not self.PUBLIC_WEB_URL.lower().startswith("https://"):
+                raise ValueError("PUBLIC_WEB_URL must be an https:// URL when DEBUG is false.")
+            if self.SIGNER_REQUIRE_DPOP and not (self.PUBLIC_API_URL or "").lower().startswith("https://"):
+                raise ValueError(
+                    "PUBLIC_API_URL must be the public https:// URL of this API when DEBUG is false "
+                    "(signer DPoP proofs are bound to it). Set SIGNER_REQUIRE_DPOP=false only to disable DPoP."
+                )
         return self
+
+    def _require_dsc_trust_anchor(self) -> None:
+        """Production must verify DSC issuers and CRL/OCSP signatures; refuse to boot without a usable anchor."""
+        from ..deterministic_core.dsc_trust import TrustAnchorError, read_trust_anchor
+
+        try:
+            read_trust_anchor(self.DSC_TRUSTED_CA_PEM_PATH, self.DSC_TRUSTED_CA_PEM)
+        except TrustAnchorError as exc:
+            raise ValueError(f"DSC trust anchor is required when DEBUG is false: {exc}") from exc
 
     @property
     def auto_create_tables(self) -> bool:

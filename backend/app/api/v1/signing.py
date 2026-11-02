@@ -26,6 +26,7 @@ from ...core.config import settings
 from ...core.database import get_db
 from ...deterministic_core import dsc_signing as dsc
 from ...deterministic_core.dsc_revocation import check_revocation
+from ...deterministic_core.dsc_trust import TrustAnchorError, read_trust_anchor
 from ...deterministic_core.audit_chain import append_audit_block
 from ...models.returns import GSTReturn, ReturnStatus
 from ...models.signing import DSCCertificate, DSCCertStatus, SigningRequest, SigningStatus
@@ -51,10 +52,15 @@ def _aware(dt: datetime) -> datetime:
 
 def _trusted_issuer():
     path = settings.DSC_TRUSTED_CA_PEM_PATH or os.getenv("DSC_TRUSTED_CA_PEM_PATH")
-    if not path:
+    if not path and not settings.DSC_TRUSTED_CA_PEM:
         return None
-    with open(path, "r", encoding="utf-8") as fh:
-        return dsc.load_certificate(fh.read())
+    try:
+        return read_trust_anchor(path, settings.DSC_TRUSTED_CA_PEM)
+    except TrustAnchorError as exc:
+        # A broken trust anchor must neither look like "certificate invalid" nor silently skip trust checks.
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=f"DSC trust anchor misconfigured: {exc}"
+        )
 
 
 def _check_certificate(cert) -> None:
@@ -62,7 +68,8 @@ def _check_certificate(cert) -> None:
     issuer = _trusted_issuer()
     dsc.validate_certificate(cert, trusted_issuer=issuer)
     check_revocation(
-        cert, issuer=issuer, mode=settings.DSC_REVOCATION_MODE, cache_seconds=settings.DSC_CRL_CACHE_SECONDS
+        cert, issuer=issuer, mode=settings.DSC_REVOCATION_MODE, cache_seconds=settings.DSC_CRL_CACHE_SECONDS,
+        ocsp_enabled=settings.DSC_OCSP_ENABLED, ocsp_cache_seconds=settings.DSC_OCSP_CACHE_SECONDS,
     )
 
 

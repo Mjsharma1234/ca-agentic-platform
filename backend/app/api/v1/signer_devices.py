@@ -9,13 +9,11 @@ Signer tokens carry scope=signer and the device id; app/api/deps.py confines the
 endpoints and re-checks the device, the user and their role on every request.
 """
 import hashlib
+import hmac
 import secrets
-import threading
-import time
 import uuid
-from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
-from typing import Annotated, Deque, Dict
+from typing import Annotated, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
@@ -24,6 +22,8 @@ from sqlalchemy.orm import Session
 
 from ...core.config import settings
 from ...core.database import get_db
+from ...core.dpop import require_dpop
+from ...core.shared_store import get_store
 from ...core.security import create_access_token
 from ...deterministic_core.audit_chain import append_audit_block
 from ...models.signing import DeviceAuthorization, DeviceGrantStatus, SignerDevice
@@ -35,26 +35,14 @@ router = APIRouter(prefix="/signing", tags=["signer-devices"])
 USER_CODE_ALPHABET = "BCDFGHJKLMNPQRSTVWXZ23456789"  # no vowels / look-alikes
 POLL_INTERVAL_SECONDS = 5
 
-_hits: Dict[str, Deque[float]] = defaultdict(deque)
-_hits_lock = threading.Lock()
-
-
 def rate_limit(key: str, limit: int, window: int = 60) -> None:
-    """Per-process sliding window. With several workers the effective limit is limit*workers;
-    put a gateway/WAF limit in front for a hard global cap."""
-    now = time.monotonic()
-    with _hits_lock:
-        q = _hits[key]
-        while q and now - q[0] > window:
-            q.popleft()
-        if len(q) >= limit:
-            raise HTTPException(status_code=429, detail="Too many requests.", headers={"Retry-After": str(window)})
-        q.append(now)
+    """Shared (Redis) sliding/fixed window when SHARED_STORE_URL is set, else per-process."""
+    if not get_store().allow(key, limit, window):
+        raise HTTPException(status_code=429, detail="Too many requests.", headers={"Retry-After": str(window)})
 
 
 def reset_rate_limits() -> None:
-    with _hits_lock:
-        _hits.clear()
+    get_store().reset()
 
 
 def _sha(value: str) -> str:
@@ -112,13 +100,28 @@ class DeviceTokenRequest(BaseModel):
     device_code: str = Field(min_length=20, max_length=200)
 
 
+def _proof_thumbprint(request: Request) -> Optional[str]:
+    """Key thumbprint from the DPoP proof on a token/refresh request (no access token exists yet)."""
+    if request.headers.get("DPoP") is None:
+        if settings.SIGNER_REQUIRE_DPOP:
+            raise HTTPException(
+                status_code=401, detail="A DPoP proof is required.",
+                headers={"WWW-Authenticate": 'DPoP error="invalid_dpop_proof", algs="ES256"'},
+            )
+        return None
+    return require_dpop(request, None)
+
+
 def _issue_access_token(user_row: UserModel, device: SignerDevice) -> Dict[str, object]:
     minutes = settings.SIGNER_ACCESS_TOKEN_MINUTES
+    claims = {
+        "sub": str(user_row.id), "tenant_id": str(user_row.firm_id), "role": user_row.role,
+        "scope": "signer", "did": str(device.id),
+    }
+    if device.dpop_jkt:
+        claims["cnf"] = {"jkt": device.dpop_jkt}
     token = create_access_token(
-        {
-            "sub": str(user_row.id), "tenant_id": str(user_row.firm_id), "role": user_row.role,
-            "scope": "signer", "did": str(device.id),
-        },
+        claims,
         expires_delta=timedelta(minutes=minutes),
     )
     return {"access_token": token, "token_type": "bearer", "expires_in": minutes * 60}
@@ -127,6 +130,7 @@ def _issue_access_token(user_row: UserModel, device: SignerDevice) -> Dict[str, 
 @router.post("/device/token")
 def poll_device_token(body: DeviceTokenRequest, request: Request, db: Session = Depends(get_db)):
     rate_limit(_client_key(request, "device-token"), limit=60)
+    jkt = _proof_thumbprint(request)
     grant = db.execute(
         select(DeviceAuthorization).where(DeviceAuthorization.device_code_hash == _sha(body.device_code))
     ).scalar_one_or_none()
@@ -158,14 +162,14 @@ def poll_device_token(body: DeviceTokenRequest, request: Request, db: Session = 
     device = SignerDevice(
         tenant_id=user_row.firm_id, user_id=user_row.id, device_name=grant.device_name,
         refresh_hash=_sha(refresh), refresh_expires_at=now + timedelta(days=settings.SIGNER_REFRESH_DAYS),
-        last_seen_at=now,
+        last_seen_at=now, dpop_jkt=jkt,
     )
     db.add(device)
     db.flush()
     grant.status = DeviceGrantStatus.CONSUMED
     append_audit_block(
         db, user_row.firm_id, str(user_row.id), user_row.role, "SIGNER_DEVICE_ENROLLED", "SIGNER_DEVICE",
-        str(device.id), {"device_name": device.device_name}, commit=False,
+        str(device.id), {"device_name": device.device_name, "dpop_bound": bool(jkt)}, commit=False,
     )
     db.commit()
     return {**_issue_access_token(user_row, device), "refresh_token": refresh}
@@ -178,6 +182,7 @@ class RefreshRequest(BaseModel):
 @router.post("/device/refresh")
 def refresh_device_token(body: RefreshRequest, request: Request, db: Session = Depends(get_db)):
     rate_limit(_client_key(request, "device-refresh"), limit=30)
+    jkt = _proof_thumbprint(request)
     h = _sha(body.refresh_token)
     device = db.execute(select(SignerDevice).where(SignerDevice.refresh_hash == h)).scalar_one_or_none()
     if device is None:
@@ -194,6 +199,11 @@ def refresh_device_token(body: RefreshRequest, request: Request, db: Session = D
     now = _utcnow()
     if device.revoked_at is not None or _aware(device.refresh_expires_at) <= now:
         _oauth_error("invalid_grant", 401)
+    if device.dpop_jkt and not (jkt and hmac.compare_digest(jkt, device.dpop_jkt)):
+        # A refresh token presented without (or with a different) key: copied token. Do not rotate it.
+        _oauth_error("invalid_grant", 401, "Refresh token is bound to a different key.")
+    if jkt and not device.dpop_jkt:
+        _oauth_error("invalid_grant", 401, "Device is not key-bound; re-enrol.")
     user_row = db.execute(select(UserModel).where(UserModel.id == device.user_id)).scalar_one_or_none()
     if user_row is None or not user_row.is_active or ROLE_HIERARCHY.get((user_row.role or "").upper(), 0) < ROLE_HIERARCHY["PARTNER"]:
         _oauth_error("invalid_grant", 401)

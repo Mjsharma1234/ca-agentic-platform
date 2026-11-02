@@ -72,9 +72,14 @@ def upgrade() -> None:
     # Legacy databases may already hold forked sequences (from the pre-lock writer). Rewriting
     # history would break the hash chain, so only enforce uniqueness when the data allows it;
     # otherwise skip loudly and let the row lock in append_audit_block prevent new forks.
-    dupes = op.get_bind().execute(
-        sa.text("SELECT COUNT(*) FROM (SELECT firm_id, sequence FROM audit_blocks GROUP BY firm_id, sequence HAVING COUNT(*) > 1) d")
-    ).scalar()
+    # In offline (--sql) mode there is no database to inspect: emit the constraint and leave the
+    # duplicate check to the DBA (SELECT firm_id, sequence ... GROUP BY ... HAVING COUNT(*) > 1).
+    if op.get_context().as_sql:
+        dupes = 0
+    else:
+        dupes = op.get_bind().execute(
+            sa.text("SELECT COUNT(*) FROM (SELECT firm_id, sequence FROM audit_blocks GROUP BY firm_id, sequence HAVING COUNT(*) > 1) d")
+        ).scalar()
     if dupes:
         print(f"WARNING: {dupes} duplicate audit (firm, sequence) pairs found; uq_audit_blocks_firm_sequence NOT created.")
     else:
@@ -84,10 +89,13 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    insp = sa.inspect(op.get_bind())
-    if any(u["name"] == "uq_audit_blocks_firm_sequence" for u in insp.get_unique_constraints("audit_blocks")):
-        with op.batch_alter_table('audit_blocks', schema=None) as batch_op:
-            batch_op.drop_constraint('uq_audit_blocks_firm_sequence', type_='unique')
+    if op.get_context().as_sql:
+        op.execute("ALTER TABLE audit_blocks DROP CONSTRAINT IF EXISTS uq_audit_blocks_firm_sequence")
+    else:
+        insp = sa.inspect(op.get_bind())
+        if any(u["name"] == "uq_audit_blocks_firm_sequence" for u in insp.get_unique_constraints("audit_blocks")):
+            with op.batch_alter_table('audit_blocks', schema=None) as batch_op:
+                batch_op.drop_constraint('uq_audit_blocks_firm_sequence', type_='unique')
 
     with op.batch_alter_table('signer_devices', schema=None) as batch_op:
         batch_op.drop_index(batch_op.f('ix_signer_devices_user_id'))

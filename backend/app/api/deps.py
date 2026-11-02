@@ -1,3 +1,4 @@
+import hmac
 import os
 import re
 from datetime import datetime, timezone
@@ -10,6 +11,7 @@ import uuid
 import jwt
 
 from ..core.config import settings
+from ..core.dpop import require_dpop
 from ..core.security import ALGORITHM
 from ..core.database import get_db
 
@@ -43,7 +45,7 @@ SIGNER_ALLOWED = re.compile(
 )
 
 
-def _authorise_signer_token(payload: dict, request: Request, db: Session) -> "User":
+def _authorise_signer_token(payload: dict, request: Request, db: Session, access_token: str = "") -> "User":
     """Desktop-signer tokens are scoped: only the signing endpoints, only while the device is
     approved and the partner is still an active Partner (role is re-read, not trusted from the token)."""
     from ..models.signing import SignerDevice
@@ -62,6 +64,22 @@ def _authorise_signer_token(payload: dict, request: Request, db: Session) -> "Us
     row = db.execute(select(UserModel).where(UserModel.id == user_id)).scalar_one_or_none()
     if row is None or not row.is_active or str(row.firm_id) != str(payload.get("tenant_id")):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Account is not active.")
+    bound_jkt = (payload.get("cnf") or {}).get("jkt")
+    if settings.SIGNER_REQUIRE_DPOP or device.dpop_jkt or bound_jkt:
+        # Sender-constrained: the request must carry a fresh proof signed by the key this device enrolled with.
+        if not device.dpop_jkt:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="This signer is not key-bound. Re-enrol the signer.",
+                headers={"WWW-Authenticate": 'DPoP error="invalid_token"'},
+            )
+        jkt = require_dpop(request, access_token)
+        if not (hmac.compare_digest(jkt, device.dpop_jkt) and bound_jkt and hmac.compare_digest(jkt, bound_jkt)):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="DPoP key does not match this signer.",
+                headers={"WWW-Authenticate": 'DPoP error="invalid_dpop_proof"'},
+            )
     device.last_seen_at = datetime.now(timezone.utc)
     db.commit()
     return User(
@@ -93,7 +111,7 @@ def get_current_user(
             if not user_id or not tenant_id or not role:
                 raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token claims.")
             if payload.get("scope") == "signer":
-                return _authorise_signer_token(payload, request, db)
+                return _authorise_signer_token(payload, request, db, auth.credentials)
 
             email = payload.get("email", "")
             full_name = payload.get("full_name", "")
