@@ -6,6 +6,17 @@ INSECURE_DEFAULT_SECRET = "your-super-secret-key-change-in-production"
 
 class Settings(BaseSettings):
     DATABASE_URL: str = "sqlite+aiosqlite:///./ca_platform.db"
+    # Schema owner connection used only by Alembic. When unset, migrations use DATABASE_URL.
+    DATABASE_ADMIN_URL: Optional[str] = None
+    # PostgreSQL row-level security: the API does SET ROLE to this non-owner, non-BYPASSRLS role on every
+    # pooled connection (created by migration 0006 as `ca_app`). Required in production on PostgreSQL.
+    DB_APP_ROLE: Optional[str] = None
+    DB_POOL_SIZE: int = 10
+    DB_MAX_OVERFLOW: int = 10
+    DB_POOL_RECYCLE_SECONDS: int = 1800
+    DB_STATEMENT_TIMEOUT_MS: int = 30000
+    DB_LOCK_TIMEOUT_MS: int = 10000
+    DB_IDLE_IN_TX_TIMEOUT_MS: int = 60000
     POSTGRES_URL: Optional[str] = "postgresql+asyncpg://postgres:postgres@localhost:5432/ca_platform"
     USE_SQLITE_FALLBACK: bool = True
     REDIS_URL: str = "redis://localhost:6379/0"
@@ -73,6 +84,11 @@ class Settings(BaseSettings):
                     "OTP_SANDBOX_MODE must be false when DEBUG is false: sandbox mode returns OTPs in API responses."
                 )
             self._require_dsc_trust_anchor()
+            if self.DATABASE_URL.startswith(("postgres://", "postgresql")) and not self.DB_APP_ROLE:
+                raise ValueError(
+                    "DB_APP_ROLE must be set (to `ca_app`) when DEBUG is false on PostgreSQL: without it the API "
+                    "connects as a role that bypasses row-level security."
+                )
             if self.DSC_REVOCATION_MODE == "off":
                 raise ValueError("DSC_REVOCATION_MODE must be soft or strict when DEBUG is false.")
             if not self.PUBLIC_WEB_URL.lower().startswith("https://"):

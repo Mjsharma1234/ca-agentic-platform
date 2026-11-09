@@ -8,7 +8,8 @@ from typing import Optional
 
 from .core.config import settings
 from .api.deps import require_role
-from .core.database import create_tables
+from .core.database import create_tables, engine, AdminSessionLocal
+from .core.db_security import enforce_rls_posture
 
 from .api.v1.documents import router as documents_router
 from .api.v1.gates import router as gates_router
@@ -27,6 +28,7 @@ create_tables()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    enforce_rls_posture(engine, production=not settings.DEBUG)
     yield
 
 app = FastAPI(
@@ -91,9 +93,8 @@ def seed_data(x_admin_key: Optional[str] = Header(None)):
     if is_prod:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found.")
 
-    from .core.database import SessionLocal
     from .deterministic_core.seed_data import seed_database
-    with SessionLocal() as session:
+    with AdminSessionLocal() as session:  # schema owner: seeding spans every tenant
         return seed_database(session)
 
 app.include_router(api_router)

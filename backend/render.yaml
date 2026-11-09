@@ -13,8 +13,12 @@ services:
         value: "false"
       - key: SECRET_KEY
         generateValue: true
-      - key: DATABASE_URL
+      - key: DATABASE_URL              # postgresql://ca_api:...?sslmode=require  (see db/provision_roles.sql)
         sync: false
+      - key: DATABASE_ADMIN_URL        # postgresql://ca_owner:...  used only by `alembic upgrade head`
+        sync: false
+      - key: DB_APP_ROLE               # RLS role the API drops to; production refuses to boot on PostgreSQL without it
+        value: ca_app
       # Required in production: the app refuses to start until these are set.
       - key: DSC_TRUSTED_CA_PEM        # PEM of the certifying authority that issues partner DSCs
         sync: false

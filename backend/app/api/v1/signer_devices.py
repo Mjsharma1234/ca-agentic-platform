@@ -21,7 +21,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ...core.config import settings
-from ...core.database import get_db
+from ...core.database import get_db, get_system_db
+from ...core.tenant_context import enter_tenant
 from ...core.dpop import require_dpop
 from ...core.shared_store import get_store
 from ...core.security import create_access_token
@@ -75,7 +76,7 @@ class DeviceCodeRequest(BaseModel):
 
 
 @router.post("/device/code", status_code=status.HTTP_200_OK)
-def request_device_code(body: DeviceCodeRequest, request: Request, db: Session = Depends(get_db)):
+def request_device_code(body: DeviceCodeRequest, request: Request, db: Session = Depends(get_system_db)):
     rate_limit(_client_key(request, "device-code"), limit=10)
     device_code = secrets.token_urlsafe(32)
     raw = "".join(secrets.choice(USER_CODE_ALPHABET) for _ in range(8))
@@ -128,7 +129,7 @@ def _issue_access_token(user_row: UserModel, device: SignerDevice) -> Dict[str, 
 
 
 @router.post("/device/token")
-def poll_device_token(body: DeviceTokenRequest, request: Request, db: Session = Depends(get_db)):
+def poll_device_token(body: DeviceTokenRequest, request: Request, db: Session = Depends(get_system_db)):
     rate_limit(_client_key(request, "device-token"), limit=60)
     jkt = _proof_thumbprint(request)
     grant = db.execute(
@@ -167,6 +168,7 @@ def poll_device_token(body: DeviceTokenRequest, request: Request, db: Session = 
     db.add(device)
     db.flush()
     grant.status = DeviceGrantStatus.CONSUMED
+    enter_tenant(db, user_row.firm_id)
     append_audit_block(
         db, user_row.firm_id, str(user_row.id), user_row.role, "SIGNER_DEVICE_ENROLLED", "SIGNER_DEVICE",
         str(device.id), {"device_name": device.device_name, "dpop_bound": bool(jkt)}, commit=False,
@@ -180,7 +182,7 @@ class RefreshRequest(BaseModel):
 
 
 @router.post("/device/refresh")
-def refresh_device_token(body: RefreshRequest, request: Request, db: Session = Depends(get_db)):
+def refresh_device_token(body: RefreshRequest, request: Request, db: Session = Depends(get_system_db)):
     rate_limit(_client_key(request, "device-refresh"), limit=30)
     jkt = _proof_thumbprint(request)
     h = _sha(body.refresh_token)
@@ -190,6 +192,7 @@ def refresh_device_token(body: RefreshRequest, request: Request, db: Session = D
         if reused is not None and reused.revoked_at is None:
             # An already-rotated refresh token came back: the token was copied. Kill the device.
             reused.revoked_at = _utcnow()
+            enter_tenant(db, reused.tenant_id)
             append_audit_block(
                 db, reused.tenant_id, str(reused.user_id), "SYSTEM", "SIGNER_DEVICE_REVOKED_TOKEN_REUSE",
                 "SIGNER_DEVICE", str(reused.id), {"device_name": reused.device_name}, commit=False,
@@ -227,7 +230,7 @@ class ApproveRequest(BaseModel):
 def approve_device(
     body: ApproveRequest,
     user: Annotated[User, Depends(require_role("PARTNER"))],
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_system_db),  # the pending code's row has no tenant until approved
 ):
     if user.scope == "signer":
         raise HTTPException(status_code=403, detail="Not available to signer tokens.")

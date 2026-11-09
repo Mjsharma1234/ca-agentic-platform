@@ -14,6 +14,7 @@ from ..core.config import settings
 from ..core.dpop import require_dpop
 from ..core.security import ALGORITHM
 from ..core.database import get_db
+from ..core.tenant_context import set_tenant
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -110,6 +111,11 @@ def get_current_user(
             
             if not user_id or not tenant_id or not role:
                 raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token claims.")
+            try:
+                # Signature is verified, so the claim is trusted: pin the tenant for PostgreSQL RLS.
+                set_tenant(db, tenant_id)
+            except ValueError:
+                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token claims.")
             if payload.get("scope") == "signer":
                 return _authorise_signer_token(payload, request, db, auth.credentials)
 
@@ -141,6 +147,7 @@ def get_current_user(
         uid = x_user_id or "00000000-0000-0000-0000-000000000002"
         tid = x_tenant_id or "00000000-0000-0000-0000-000000000001"
         role = x_user_role or "ARTICLE_TRAINEE"
+        set_tenant(db, tid)
         return User(id=uid, tenant_id=tid, role=role, email="test.user@cafirm.in", full_name="Automated Test Subject")
 
     # 3. Reject Unauthenticated Requests

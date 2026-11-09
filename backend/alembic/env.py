@@ -20,8 +20,25 @@ if config.config_file_name is not None:
 target_metadata = Base.metadata
 
 
+# Physical-tuning indexes created by migration 0007 (PostgreSQL only) are not modelled on the ORM.
+_PG_TUNING_INDEXES = {
+    "ix_invoices_tenant_client_date", "ix_gst_returns_tenant_client_period", "ix_gate_decisions_tenant_created",
+    "ix_firm_obligations_tenant_due", "ix_firm_obligations_tenant_state", "ix_firm_notices_tenant_hearing",
+    "ix_firm_daybook_tenant_day", "ix_firm_gate_logs_tenant_decided", "ix_audit_ledger_tenant_created",
+    "ix_signing_requests_tenant_status", "ix_signing_requests_tenant_expiry", "ix_signer_devices_tenant_active",
+    "ix_dsc_certificates_tenant_user", "ix_clients_tenant_name_live", "ix_client_gstins_tenant_client",
+    "ix_users_phone", "ix_client_gstins_client_id", "ix_otp_records_identifier_created", "ix_otp_records_expires",
+    "brin_audit_ledger_created", "brin_audit_blocks_timestamp",
+}
+
+
+def include_object(obj, name, type_, reflected, compare_to):
+    return not (type_ == "index" and reflected and name in _PG_TUNING_INDEXES)
+
+
 def _sync_url() -> str:
-    url = settings.DATABASE_URL
+    # Migrations need the schema owner; the API itself runs as the restricted role (DATABASE_URL).
+    url = settings.DATABASE_ADMIN_URL or settings.DATABASE_URL
     replacements = {
         "sqlite+aiosqlite:": "sqlite:",
         "postgresql+asyncpg:": "postgresql+psycopg2:",
@@ -41,6 +58,7 @@ def run_migrations_offline() -> None:
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
         compare_type=True,
+        include_object=include_object,
         render_as_batch=url.startswith("sqlite"),
     )
     with context.begin_transaction():
@@ -56,6 +74,7 @@ def run_migrations_online() -> None:
             connection=connection,
             target_metadata=target_metadata,
             compare_type=True,
+            include_object=include_object,
             render_as_batch=connection.dialect.name == "sqlite",
         )
         with context.begin_transaction():

@@ -9,7 +9,8 @@ from sqlalchemy import select, or_
 
 from ...core.config import settings
 from ...core.security import create_access_token, get_password_hash
-from ...core.database import get_db
+from ...core.database import get_db, get_system_db
+from ...core.tenant_context import enter_tenant
 from ..deps import get_current_user, User as DepUser
 from ...models.tenant import Firm, User, UserRole, AuditBlock
 from ...deterministic_core.otp_service import OTPService
@@ -90,7 +91,7 @@ DEMO_PERSONAS = [
 # Endpoints
 # -------------------------------------------------------------
 @router.post("/otp/send")
-def send_otp(req: SendOTPRequest, db: Session = Depends(get_db)):
+def send_otp(req: SendOTPRequest, db: Session = Depends(get_system_db)):
     """Request a 6-digit OTP via Fast2SMS / Twilio (SMS) or Resend / SMTP (Email).
     In sandbox mode, the OTP is returned in the response and printed to the server logs.
     """
@@ -109,7 +110,7 @@ def send_otp(req: SendOTPRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to dispatch OTP. Please try again.")
 
 @router.post("/otp/verify", response_model=AuthResponse)
-def verify_otp(req: VerifyOTPRequest, request: Request, db: Session = Depends(get_db)):
+def verify_otp(req: VerifyOTPRequest, request: Request, db: Session = Depends(get_system_db)):
     """Verifies the 6-digit OTP, loads or provisions the user profile, appends an
     ICAI SQC 1 cryptographic audit block, and issues a signed JWT session token.
     """
@@ -194,6 +195,7 @@ def verify_otp(req: VerifyOTPRequest, request: Request, db: Session = Depends(ge
         }
         # Single canonical writer: login blocks must hash exactly like every other block,
         # otherwise the chain verifier reports tampering after the first login.
+        enter_tenant(db, user.firm_id)  # identified: leave system scope before touching tenant data
         append_audit_block(
             db, user.firm_id, str(user.id), user.role, "LOGIN_OTP_VERIFIED", "USER_SESSION", str(user.id), payload
         )
@@ -228,7 +230,7 @@ def verify_otp(req: VerifyOTPRequest, request: Request, db: Session = Depends(ge
     )
 
 @router.post("/firebase/verify", response_model=AuthResponse)
-def verify_firebase_auth(req: FirebaseVerifyRequest, request: Request, db: Session = Depends(get_db)):
+def verify_firebase_auth(req: FirebaseVerifyRequest, request: Request, db: Session = Depends(get_system_db)):
     """Verifies Firebase Auth ID Token, resolves CA user profile, logs SQC-1 AuditBlock,
     and returns platform RBAC JWT session token.
     """
@@ -326,6 +328,7 @@ def verify_firebase_auth(req: FirebaseVerifyRequest, request: Request, db: Sessi
         }
         # Single canonical writer: login blocks must hash exactly like every other block,
         # otherwise the chain verifier reports tampering after the first login.
+        enter_tenant(db, user.firm_id)  # identified: leave system scope before touching tenant data
         append_audit_block(
             db, user.firm_id, str(user.id), user.role, "FIREBASE_AUTH_VERIFIED", "USER_SESSION", str(user.id), payload
         )
