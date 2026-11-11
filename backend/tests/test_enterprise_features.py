@@ -232,6 +232,18 @@ def test_client_portal_summary_endpoint():
     assert len(portal["filings"]) >= 3
     assert len(portal["active_notices"]) >= 1
 
+def _firm_user(db, role):
+    """A signed-in user of an existing firm (the partner check now reads the session, not the request)."""
+    from app.models.tenant import Firm
+    from app.api.deps import User as SessionUser
+    firm = db.query(Firm).first()
+    if firm is None:
+        firm = Firm(id=uuid.uuid4(), firm_code=f"t-{uuid.uuid4().hex[:6]}", firm_name="Test Firm")
+        db.add(firm)
+        db.commit()
+    return SessionUser(id=uuid.uuid4(), tenant_id=firm.id, role=role, email="actor@test.in")
+
+
 def test_partner_employee_id_creation_and_rbac(db_session):
     # Partner provisions Manager ID
     req = CreateEmployeeRequest(
@@ -240,29 +252,27 @@ def test_partner_employee_id_creation_and_rbac(db_session):
         role="MG",
         membership_no="249812",
         focus="GST Advisory & Rule 88D Reconciliations",
-        partner_id="srinivas",
-        partner_role="PT"
     )
-    res = create_employee_id(req, db_session)
+    res = create_employee_id(req, db_session, _firm_user(db_session, "PARTNER"))
     assert res["status"] == "CREATED"
     assert res["employee_id"].startswith("EMP-")
     assert res["role"] == "MG"
-    assert res["role_title"] == "Manager"
+    assert res["staff"]["role"] == "MG"
+    assert "temporary_password" not in res
     assert res["sqc1_logged"] is True
 
 def test_employee_creation_non_partner_rejection(db_session):
-    # Article Trainee (AR) attempts to create employee ID
+    # A trainee cannot add people, whatever the request body claims
     unauthorized_req = CreateEmployeeRequest(
         full_name="Unauthorized Person",
         email="unauth@nallamala.in",
         role="AR",
         partner_id="kavitha",
-        partner_role="AR" # Not a partner!
+        partner_role="PT",  # spoofed: ignored, the session role decides
     )
     with pytest.raises(HTTPException) as exc_info:
-        create_employee_id(unauthorized_req, db_session)
+        create_employee_id(unauthorized_req, db_session, _firm_user(db_session, "ARTICLE_TRAINEE"))
     assert exc_info.value.status_code == 403
-    assert "Statutory Authority Violation" in exc_info.value.detail
 
 def test_live_tracker_telemetry_and_portal_sync(db_session):
     # Check live tracker

@@ -4,14 +4,17 @@ Prefix: /billing
 Pattern: In-memory data store, same as clients.py / gates.py
 """
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 from enum import Enum
 from datetime import datetime, date
 import uuid
 
-router = APIRouter(prefix="/billing", tags=["billing"])
+from ..deps import get_current_user
+
+# Phase 1: signed session required for every route.
+router = APIRouter(prefix="/billing", tags=["billing"], dependencies=[Depends(get_current_user)])
 
 
 # ---------------------------------------------------------------------------

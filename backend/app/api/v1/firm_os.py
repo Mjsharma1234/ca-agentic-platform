@@ -12,14 +12,15 @@ from sqlalchemy import select, update
 
 from ...core.config import settings
 from ...core.database import get_db
-from ...api.deps import get_optional_current_user, User, ROLE_HIERARCHY
+from ...api.deps import get_optional_current_user, get_current_user, User, ROLE_HIERARCHY
 from ...models.firm_os import FirmStateModel, ObligationItem, NoticeItem, DaybookEntry, GateApprovalLog
 from ...models.audit_ledger import AuditLedger, ActionType
 from ...deterministic_core.reconciler import reconcile_books_with_gstr2b
 from ...deterministic_core.tally_bridge import generate_tally_purchase_xml
 from ...deterministic_core.seed_data import SAMPLE_PURCHASE_BILLS, SAMPLE_GSTR2B_FEEDS
 
-router = APIRouter(prefix="/firm-os", tags=["firm-os"])
+# Every /firm-os route needs a signed session (Phase 1: no anonymous access to firm data).
+router = APIRouter(prefix="/firm-os", tags=["firm-os"], dependencies=[Depends(get_current_user)])
 
 DEFAULT_FIRM_ID = "nallamala-co"
 
@@ -48,69 +49,31 @@ def sha256_hash(payload: Any) -> str:
     s = json.dumps(payload, sort_keys=True, default=str)
     return hashlib.sha256(s.encode("utf-8")).hexdigest()
 
-@router.get("/state")
-def get_firm_state(db: Session = Depends(get_db)):
-    """Fetch the full persistent state of the CA Firm OS."""
-    stmt = select(FirmStateModel).where(FirmStateModel.firm_id == DEFAULT_FIRM_ID)
-    res = db.execute(stmt)
-    firm_state = res.scalar_one_or_none()
-    
+@router.get("/state", deprecated=True)
+def get_firm_state(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Legacy: the old whole-firm JSON snapshot, read-only and scoped to the caller's firm.
+    The tracker now reads and writes individual records through /api/v1/ops."""
+    stmt = select(FirmStateModel).where(FirmStateModel.firm_id == str(current_user.tenant_id))
+    firm_state = db.execute(stmt).scalar_one_or_none()
     if firm_state and firm_state.state_json:
         return {
             "status": "success",
             "source": "database",
             "version": firm_state.version,
             "last_synced_by": firm_state.last_synced_by,
-            "state": firm_state.state_json
+            "state": firm_state.state_json,
+            "deprecated": "Use GET /api/v1/ops/workspace",
         }
-    
-    return {
-        "status": "not_seeded",
-        "source": "empty",
-        "message": "No database snapshot found. Frontend will initialize from seed and sync back."
-    }
+    return {"status": "not_seeded", "source": "empty", "message": "No legacy snapshot. Use GET /api/v1/ops/workspace."}
 
-@router.post("/state/sync")
+
+@router.post("/state/sync", deprecated=True)
 def sync_firm_state(req: StateSyncRequest, db: Session = Depends(get_db)):
-    """Sync and persist frontend state mutations to the database."""
-    stmt = select(FirmStateModel).where(FirmStateModel.firm_id == DEFAULT_FIRM_ID)
-    res = db.execute(stmt)
-    firm_state = res.scalar_one_or_none()
-    
-    snapshot_hash = sha256_hash(req.state)
-    
-    if firm_state:
-        firm_state.state_json = req.state
-        firm_state.last_synced_by = req.synced_by or "system"
-        firm_state.updated_at = datetime.utcnow()
-    else:
-        firm_state = FirmStateModel(
-            firm_id=DEFAULT_FIRM_ID,
-            firm_name="Nallamala & Co., Chartered Accountants",
-            state_json=req.state,
-            version="v1.0",
-            last_synced_by=req.synced_by or "system"
-        )
-        db.add(firm_state)
-    
-    # Also log a state audit entry
-    audit = AuditLedger(
-        tenant_id=uuid.UUID("00000000-0000-0000-0000-000000000001"),
-        client_id=uuid.UUID("11111111-1111-1111-1111-111111111111"),
-        agent_id="FO-3",
-        agent_version="v1.1",
-        action_type=ActionType.PROPOSED,
-        entity_type="FIRM_STATE_SNAPSHOT",
-        entity_id=uuid.uuid4(),
-        input_hash=snapshot_hash,
-        output_hash=snapshot_hash,
-        output_snapshot={"synced_by": req.synced_by, "timestamp": datetime.utcnow().isoformat()},
-        actor_role=req.synced_by
+    """Retired: whole-state overwrites let any caller replace every record at once."""
+    raise HTTPException(
+        status_code=410,
+        detail="Whole-state sync is retired. Save individual records through /api/v1/ops/{entity}/{ref}.",
     )
-    db.add(audit)
-    
-    db.commit()
-    return {"status": "success", "hash": snapshot_hash, "synced_at": datetime.utcnow().isoformat()}
 
 @router.post("/gates/{gate_code}/decide")
 def decide_gate(
@@ -595,129 +558,85 @@ class PortalSyncRequest(BaseModel):
     gstins: Optional[List[str]] = None
 
 @router.post("/team/members")
-def create_employee_id(req: CreateEmployeeRequest, db: Session = Depends(get_db)):
-    """Partner-only endpoint to onboard new employees, generate internal IDs, and issue credentials.
-    Enforces ICAI governance and logs creation to SQC-1 Cryptographic Audit Chain.
-    """
-    if req.partner_role.upper() not in ["PT", "MP"]:
-        raise HTTPException(status_code=403, detail="Statutory Authority Violation: Only Partners can create employee IDs and assign firm roles.")
-
-    # Derive employee username slug and unique ID
-    emp_slug = re.sub(r'[^a-z0-9]', '', req.full_name.lower().split()[0])
-    random_suffix = uuid.uuid4().hex[:4]
-    employee_id = f"EMP-{datetime.utcnow().year}-{random_suffix.upper()}"
-    username = f"{emp_slug}.{random_suffix}"
-    temp_password = f"Ca@{random_suffix.upper()}!2026"
-
-    # Fetch firm
-    firm = db.execute(select(Firm).where(Firm.firm_code == DEFAULT_FIRM_ID)).scalar_one_or_none()
-    firm_id = firm.id if firm else uuid.UUID("00000000-0000-0000-0000-000000000001")
-
-    # Create user in database
+def create_employee_id(
+    req: CreateEmployeeRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Partner-only: add a person to the caller's firm (login account + ops staff record).
+    The partner check uses the signed session, never request fields. Sign-in is by OTP to the
+    person's email or phone, so no password is generated or returned."""
+    from ...models.tenant import User as UserModel, UserRole
+    from ...models.ops import OpsStaff
     from ...core.security import get_password_hash
-    from ...models.tenant import User, UserRole
 
-    # Map role code
-    role_mapping = {
-        "PT": UserRole.PARTNER.value,
-        "MP": UserRole.PARTNER.value,
-        "MG": UserRole.MANAGER.value,
-        "SA": UserRole.SENIOR_MANAGER.value,
-        "AR": UserRole.ARTICLE_TRAINEE.value,
-        "PX": UserRole.ARTICLE_TRAINEE.value
-    }
-    user_role = role_mapping.get(req.role.upper(), UserRole.ARTICLE_TRAINEE.value)
+    if ROLE_HIERARCHY.get(current_user.role, 0) < 5:
+        raise HTTPException(status_code=403, detail="Only partners can add people to the firm.")
+    role = req.role.upper()
+    if role not in {"MP", "PT", "MG", "CC", "FO", "SA", "AR", "PX"}:
+        raise HTTPException(status_code=422, detail="Unknown role code.")
+    email = req.email.strip().lower()
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+        raise HTTPException(status_code=422, detail="A valid email address is required.")
 
-    new_user = User(
-        firm_id=firm_id,
-        email=req.email,
-        full_name=req.full_name,
-        role=user_role,
-        membership_no=req.membership_no,
-        hashed_password=get_password_hash(temp_password),
-        phone=req.phone,
-        is_active=True
+    tenant = current_user.tenant_id
+    from ...core.tenant_context import system_scope
+    with system_scope(db):  # emails are unique across firms
+        if db.execute(select(UserModel.id).where(UserModel.email == email)).first():
+            raise HTTPException(status_code=409, detail="Someone with this email already has an account.")
+
+    role_mapping = {"PT": UserRole.PARTNER.value, "MP": UserRole.PARTNER.value, "MG": UserRole.MANAGER.value,
+                    "CC": UserRole.MANAGER.value}
+    new_user = UserModel(
+        firm_id=tenant, email=email, full_name=req.full_name.strip(),
+        role=role_mapping.get(role, UserRole.ARTICLE_TRAINEE.value), membership_no=req.membership_no,
+        hashed_password=get_password_hash(uuid.uuid4().hex), phone=req.phone or None, is_active=True,
     )
     db.add(new_user)
+    db.flush()
 
-    # Append to FirmStateModel so the reactive frontend immediately sees the new staff member
-    stmt = select(FirmStateModel).where(FirmStateModel.firm_id == DEFAULT_FIRM_ID)
-    firm_state = db.execute(stmt).scalar_one_or_none()
-    if firm_state and firm_state.state_json:
-        staff_list = firm_state.state_json.get("team", [])
-        staff_entry = {
-            "id": username,
-            "emp_id": employee_id,
-            "name": req.full_name,
-            "short": req.full_name.split()[0],
-            "role": req.role.upper(),
-            "focus": req.focus,
-            "mno": req.membership_no or "",
-            "cost": req.stipend_or_cost,
-            "status": "In office · Active",
-            "created_at": datetime.utcnow().isoformat()
-        }
-        staff_list.append(staff_entry)
-        firm_state.state_json["team"] = staff_list
-        firm_state.updated_at = datetime.utcnow()
+    base = re.sub(r"[^a-z0-9]", "", req.full_name.lower().split()[0]) or "staff"
+    ref, n = base, 1
+    while db.execute(select(OpsStaff.id).where(OpsStaff.tenant_id == tenant, OpsStaff.ref == ref)).first():
+        n += 1
+        ref = f"{base}{n}"
+    employee_id = f"EMP-{datetime.utcnow().year}-{uuid.uuid4().hex[:4].upper()}"
+    record = {
+        "id": ref, "emp_id": employee_id, "name": req.full_name.strip(), "short": req.full_name.split()[0],
+        "role": role, "focus": req.focus, "mno": req.membership_no or "", "cost": req.stipend_or_cost,
+        "status": "In office · Active", "email": email, "phone": req.phone or "",
+    }
+    db.add(OpsStaff(tenant_id=tenant, ref=ref, name=record["name"], role=role, email=email,
+                    phone=req.phone or None, user_id=new_user.id, data=record, updated_by=str(current_user.id)))
 
-    # Seal in cryptographic audit chain
     append_audit_block(
-        db=db,
-        firm_id=firm_id,
-        actor_id=req.partner_id,
-        actor_role="PT",
-        action="EMPLOYEE_CREDENTIAL_ISSUED",
-        entity_type="USER",
-        entity_id=employee_id,
-        payload={
-            "employee_id": employee_id,
-            "username": username,
-            "full_name": req.full_name,
-            "role": req.role.upper(),
-            "email": req.email,
-            "membership_no": req.membership_no
-        }
+        db=db, firm_id=tenant, actor_id=str(current_user.id), actor_role=current_user.role,
+        action="EMPLOYEE_ADDED", entity_type="USER", entity_id=employee_id,
+        payload={"employee_id": employee_id, "staff_ref": ref, "full_name": record["name"], "role": role, "email": email},
     )
-
     db.commit()
-
     return {
         "status": "CREATED",
         "employee_id": employee_id,
-        "username": username,
-        "full_name": req.full_name,
-        "email": req.email,
-        "role": req.role.upper(),
-        "role_title": "Partner" if req.role in ['PT', 'MP'] else "Manager" if req.role == 'MG' else "Article Trainee",
-        "temporary_password": temp_password,
-        "membership_or_reg_no": req.membership_no or "Pending Allocation",
-        "allocated_focus": req.focus,
+        "username": ref,
+        "staff": record,
+        "full_name": record["name"],
+        "email": email,
+        "role": role,
+        "membership_or_reg_no": req.membership_no or "Pending allocation",
+        "sign_in": "One-time code sent to this email or phone at sign-in",
         "sqc1_logged": True,
-        "message": f"Employee ID {employee_id} created successfully and sealed into ICAI SQC 1 compliance ledger."
     }
+
 
 @router.get("/team/members")
-def list_employee_members(db: Session = Depends(get_db)):
-    """Lists all active firm employees, their assigned roles, and workload capacity."""
-    stmt = select(FirmStateModel).where(FirmStateModel.firm_id == DEFAULT_FIRM_ID)
-    firm_state = db.execute(stmt).scalar_one_or_none()
-    
-    if firm_state and firm_state.state_json and "team" in firm_state.state_json:
-        team = firm_state.state_json["team"]
-    else:
-        # Default team seed
-        team = [
-            {"id": "srinivas", "name": "CA Srinivas Nallamala", "role": "PT", "focus": "Direct Tax & Corporate Litigation", "mno": "218491"},
-            {"id": "divya", "name": "CA Divya Reddy", "role": "MG", "focus": "GST Advisory & Rule 88D Reconciliations", "mno": "249812"},
-            {"id": "rohit", "name": "Rohit Verma", "role": "SA", "focus": "Complex Multi-Pass Reconciliation & IMS", "mno": "SRO-049811"},
-            {"id": "kavitha", "name": "Kavitha Sundaram", "role": "AR", "focus": "Intake OCR & Voucher Data Entry", "mno": "SRO-051283"}
-        ]
+def list_employee_members(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Lists the people in the caller's firm."""
+    from ...models.ops import OpsStaff
+    rows = db.execute(select(OpsStaff).where(OpsStaff.tenant_id == current_user.tenant_id)).scalars().all()
+    team = [{**(r.data or {}), "id": r.ref, "role": r.role, "name": r.name} for r in rows]
+    return {"count": len(team), "members": team}
 
-    return {
-        "count": len(team),
-        "members": team
-    }
 
 @router.get("/live-tracker")
 def get_live_tracker_telemetry(db: Session = Depends(get_db)):

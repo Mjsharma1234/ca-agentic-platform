@@ -64,7 +64,8 @@ const ICONS = {
   tag: '<path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L2 12V2h10l8.6 8.6a2 2 0 0 1 0 2.8z"/><path d="M7 7h.01"/>',
   layers: '<path d="m12 2 10 5-10 5L2 7z"/><path d="m2 17 10 5 10-5M2 12l10 5 10-5"/>'
 };
-const icon = (n, cls = '') => `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[n] || ''}</svg>`;
+const ICON_ALIAS = { 'user-check': 'user', 'check-circle': 'check', 'shield-check': 'shield', 'alert-triangle': 'alert', 'refresh-cw': 'refresh' };
+const icon = (n, cls = '') => `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[n] || ICONS[ICON_ALIAS[n]] || ''}</svg>`;
 const BRAND_MARK = `<svg class="brand-mark" viewBox="0 0 40 40" aria-hidden="true"><rect x="6" y="3.5" width="27" height="33" rx="4.5" fill="#E9E5DB"/><rect x="6" y="3.5" width="7" height="33" rx="3.5" fill="#BFA472"/><path d="M13 10.5h20M13 29.5h20" stroke="#14171D" stroke-opacity=".25" stroke-width="1.3"/><circle cx="23" cy="20" r="5" fill="none" stroke="#14171D" stroke-width="1.7"/><path d="M23 17.4v5.2M20.4 20h5.2" stroke="#14171D" stroke-width="1.1"/></svg>`;
 
 /* ---------------- utilities ---------------- */
@@ -170,16 +171,16 @@ function seedState(dd, r) {
   if (dd <= 15) return x < 0.2 ? 'preparing' : x < 0.55 ? 'received' : 'awaiting';
   return x < 0.55 ? 'scheduled' : 'awaiting';
 }
-function genObligations() {
+function genObligations(clients = ALL_CLIENTS) {
   const start = new Date(TODAY.getTime() - 26 * 864e5), end = new Date(TODAY.getTime() + 45 * 864e5);
   const out = [];
-  ALL_CLIENTS.forEach(c => CATALOGUE.filter(f => f.rule && applies(f, c)).forEach(f => {
+  clients.forEach(c => CATALOGUE.filter(f => f.rule && applies(f, c)).forEach(f => {
     dueDatesInWindow(f.rule, start, end).forEach(({ due, period }) => {
       const id = 'ob-' + fnv(c.id + f.id + period + due.toISOString()).slice(0, 7);
       const r = seeded(id);
       let st = seedState(daysTo(due), r);
       if (f.m === 'int' && (st === 'sign' || st === 'filed')) st = st === 'sign' ? 'review' : 'closed';
-      const team = c.team.length ? c.team : [c.manager];
+      const team = (c.team && c.team.length) ? c.team : [c.manager].filter(Boolean);
       let prep = pick(team, r);
       if ((st === 'scheduled' || st === 'awaiting') && !c.internal && r() < 0.16) prep = null;
       const arn = (f.d === 'GST' ? 'AA' + (c.gstin || '36').slice(0, 2) : 'ACK') + String(Math.floor(r() * 1e12)).padStart(12, '0');
@@ -213,7 +214,7 @@ function makeExtension(obs) {
 }
 
 /* ---------------- state & persistence ---------------- */
-const KEY = 'cafirmos.state.v5';
+const KEY = 'cafirmos.state.v6'; // v6: state persists across days (no daily wipe)
 let STATE;
 function freshState() {
   const s = {
@@ -246,6 +247,7 @@ function freshState() {
 }
 function load() {
   _load();
+  hydrateExtras();
   if (!STATE.theme) STATE.theme = 'light';
 }
 function _load() {
@@ -253,16 +255,63 @@ function _load() {
     const raw = localStorage.getItem(KEY);
     if (raw) {
       const s = JSON.parse(raw);
-      if (s.seededFor === dayKey(TODAY)) { STATE = s; return; }
-      const keep = { persona: s.persona, theme: s.theme || 'light', session: s.session || null };
-      freshState(); Object.assign(STATE, keep); return;
+      STATE = s;
+      // A new day no longer wipes the workspace: keep every change and only add
+      // obligations whose due dates have rolled into the window since the last visit.
+      if (s.seededFor !== dayKey(TODAY)) { topUpObligations(); s.seededFor = dayKey(TODAY); }
+      return;
     }
   } catch (e) { /* storage unavailable — run in memory */ }
   freshState();
 }
+/* Add obligations that are new to the rolling window (ids are deterministic, so
+   existing items — and everything people did to them — are left untouched). */
+function topUpObligations(clients) {
+  if (!STATE || !Array.isArray(STATE.obligations)) return 0;
+  const have = new Set(STATE.obligations.map(o => o.id));
+  const pool = clients || ALL_CLIENTS.concat(STATE.newClients || []);
+  const fresh = genObligations(pool).filter(o => !have.has(o.id)).map(o => {
+    // Anything not yet due starts at the beginning of the line, not at a random seeded state.
+    if (new Date(o.due) >= TODAY) { o.state = 'scheduled'; o.ack = null; o.docs[1] = 0; delete o.filedAt; }
+    return o;
+  });
+  if (!fresh.length) return 0;
+  STATE.obligations = STATE.obligations.concat(fresh).sort((a, b) => new Date(a.due) - new Date(b.due));
+  return fresh.length;
+}
+/* Add a client to the workspace and enrol its recurring filings straight away.
+   Missing profile fields get safe defaults so every screen can render the client. */
+function enrolClient(input, opts = {}) {
+  const lead = opts.partner || (typeof me === 'function' && me() ? me().id : 'srinivas');
+  const c = Object.assign({
+    type: 'Private company', pan: '', state: 'TS', city: '—', tags: [], partner: lead, manager: lead, team: [],
+    turnover: 0, fee: 0, lang: 'English', channel: 'Email', risk: 'Medium', health: 80,
+    since: TODAY.getFullYear(), contact: '—', books: '—'
+  }, input);
+  c.short = c.short || String(c.name || c.id).split(' ').slice(0, 2).join(' ');
+  if (!Array.isArray(c.team)) c.team = [];
+  STATE.newClients = STATE.newClients || [];
+  if (clientById(c.id)) return { client: clientById(c.id), added: 0, duplicate: true };
+  STATE.newClients.push(c);
+  STATE.walls[c.id] = [...new Set([c.partner, c.manager, ...c.team, ...(opts.wall || [])].filter(Boolean))];
+  const added = topUpObligations([c]);
+  ledgerAdd({ actor: lead, kind: 'human', action: `enrolled ${c.short} · ${added} filings scheduled`, client: c.id, obj: 'Clients' });
+  return { client: c, added, duplicate: false };
+}
+function addTeamMember(t) {
+  STATE.extraTeam = STATE.extraTeam || [];
+  if (!STATE.extraTeam.find(x => x.id === t.id)) STATE.extraTeam.push(t);
+  if (!TEAM.find(x => x.id === t.id)) TEAM.push(t);
+  save();
+  return t;
+}
+/* People added from Team & capacity live in STATE.extraTeam; merge them into TEAM on every load. */
+function hydrateExtras() {
+  (STATE.extraTeam || []).forEach(t => { if (!TEAM.find(x => x.id === t.id)) TEAM.push(t); });
+}
 let saveT;
 function save() { clearTimeout(saveT); saveT = setTimeout(() => { try { localStorage.setItem(KEY, JSON.stringify(STATE)); } catch (e) { } }, 120); }
-function resetDemo() { try { localStorage.removeItem(KEY); } catch (e) { } const keep = { theme: STATE.theme, session: STATE.session }; freshState(); Object.assign(STATE, keep); save(); applyTheme(); renderShell(); route(); toast('Demo reset — a fresh day at the firm', 'agent', 'refresh'); }
+function resetDemo() { if (typeof API_CLIENT !== 'undefined' && API_CLIENT.connected) return toast('Reset is only for the offline demo. Your firm records are stored on the server and are not reset.', 'warn', 'lock'); try { localStorage.removeItem(KEY); } catch (e) { } const keep = { theme: STATE.theme, session: STATE.session }; freshState(); Object.assign(STATE, keep); save(); applyTheme(); renderShell(); route(); toast('Demo reset — a fresh day at the firm', 'agent', 'refresh'); }
 
 /* ---------------- people & permissions ---------------- */
 const me = () => person(STATE.persona);
@@ -380,7 +429,10 @@ function feedItem(r, isNew) {
   const who = r.kind === 'agent' ? `<span class="glyph agent sm">${esc(r.actor)}</span>` : r.kind === 'code' ? `<span class="glyph code sm">fx</span>` : r.kind === 'client' ? '<span class="glyph client sm"></span>' : avatar(r.actor, 'sm');
   return `<div class="feed-item k-${r.kind} ${isNew ? 'new' : ''}">${who}<div class="body"><b>${esc(actorName(r.actor) === 'system' ? 'Computation core' : actorName(r.actor))}</b> ${esc(r.action)}${c ? ` · <a href="#/client/${c.id}" class="dim">${esc(c.short)}</a>` : ''}<div class="tiny muted">${esc(r.obj || '')}</div></div><span class="time">${fmtT(r.at)}</span></div>`;
 }
-function startLive() { clearInterval(LIVE.timer); LIVE.timer = setInterval(liveTick, 6500); }
+/* The simulated runtime used to move filings and invent acknowledgements every 6.5s.
+   It is switched off so that nothing on screen claims to have happened unless a person
+   (or, later, a real backend job) did it. Set window.FIRM_OS_SIMULATE = true to demo it. */
+function startLive() { clearInterval(LIVE.timer); if (window.FIRM_OS_SIMULATE === true) LIVE.timer = setInterval(liveTick, 6500); }
 
 /* ---------------- gate queue (seeded items + obligations at G6/G7) ---------------- */
 function gateQueue() {
@@ -461,7 +513,7 @@ function renderShell() {
     <div class="search" id="open-palette" role="button" tabindex="0">${icon('search')}<span class="ph">Search clients, filings, people, actions…</span><kbd>⌘K</kbd></div>
     <div class="spacer"></div>
     <span class="pulse-pill hide-sm" id="peak-pill"></span>
-    <button class="pulse-pill hide-sm" id="autopilot" style="cursor:pointer" title="Autopilot runs continuously; nothing crosses a gate without a person">${STATE.autopilot ? '<span class="dot live"></span> Autopilot on' : '<span class="dot" style="background:var(--ink-3)"></span> Autopilot paused'}</button>
+    <button class="pulse-pill hide-sm" id="autopilot" style="cursor:pointer" title="${window.FIRM_OS_SIMULATE === true ? 'Demo simulation running' : 'Agents are not connected yet — nothing runs automatically'}">${window.FIRM_OS_SIMULATE === true ? (STATE.autopilot ? '<span class="dot live"></span> Simulation on' : '<span class="dot" style="background:var(--ink-3)"></span> Simulation paused') : '<span class="dot" style="background:var(--ink-3)"></span> Autopilot not connected'}</button>
     <button class="icon-btn" id="bell" aria-label="Alerts" title="Alerts">${icon('bell')}<span class="bcount" data-bell></span></button>
     <button class="icon-btn" id="legend-btn" aria-label="Colour key" title="Colour key">${icon('palette')}</button>
     <button class="icon-btn" id="theme-btn" aria-label="Toggle theme">${icon(document.documentElement.dataset.theme === 'dark' || (!document.documentElement.dataset.theme && matchMedia('(prefers-color-scheme: dark)').matches) ? 'sun' : 'moon')}</button>
@@ -478,7 +530,7 @@ function renderShell() {
   $('#legend-btn').onclick = openLegend;
   $('#assign-btn').onclick = () => openTaskModal();
   $('#bell').onclick = () => openSheet({ title: 'Alerts', sub: 'Things that need attention across your clients, newest rules first', body: `<div style="display:grid;gap:10px">${alertCards(buildAlerts())}</div><div class="card mt16"><div class="card-h"><h3>Waiting on you</h3></div><div class="list">${gateQueue().filter(g => gateAllowed(g).ok).slice(0, 5).map(g => gateRow(g)).join('') || '<div class="empty small">Nothing.</div>'}</div></div>`, onMount: s => { bindAlerts(s); bindGateRows(s); } });
-  $('#autopilot').onclick = () => { STATE.autopilot = !STATE.autopilot; save(); renderShell(); highlightNav(); toast(STATE.autopilot ? 'Autopilot resumed' : 'Autopilot paused — nothing new will be prepared', STATE.autopilot ? 'agent' : 'warn', STATE.autopilot ? 'play' : 'pause'); };
+  $('#autopilot').onclick = () => { if (window.FIRM_OS_SIMULATE !== true) return toast('Agents are not connected yet. Every change you see was made by a person in this workspace.', 'warn', 'info'); STATE.autopilot = !STATE.autopilot; save(); renderShell(); highlightNav(); toast(STATE.autopilot ? 'Autopilot resumed' : 'Autopilot paused — nothing new will be prepared', STATE.autopilot ? 'agent' : 'warn', STATE.autopilot ? 'play' : 'pause'); };
   updateCounts(); highlightNav();
 }
 function updateCounts() {
@@ -591,7 +643,8 @@ function openPersona() {
       const all = (STATE.caps.all_clients || []).includes(t.role);
       return `<div class="row click" data-p="${t.id}">${avatar(t.id, 'lg')}<div class="grow"><div class="t1">${esc(t.name)} ${t.id === STATE.persona ? '<span class="chip ok" style="margin-left:6px">Current</span>' : ''}</div><div class="t2">${ROLES[t.role].name} · ${esc(t.focus)}</div></div><span class="chip outline">${all ? 'All clients' : vis + ' clients'}</span>${icon('chev', 'chev')}</div>`;
     }).join('')}</div>`,
-    onMount: el => { $('#to-portal', el).addEventListener('click', () => closeSheet()); $('#sign-out', el).onclick = () => { ledgerAdd({ actor: me().id, kind: 'human', action: 'signed out of the workspace', obj: 'Sign-in' }); STATE.session = null; save(); closeSheet(); navTo('#/login'); toast('Signed out', 'code', 'lock'); }; $$('[data-p]', el).forEach(r => r.onclick = () => {
+    onMount: el => { $('#to-portal', el).addEventListener('click', () => closeSheet()); $('#sign-out', el).onclick = () => { ledgerAdd({ actor: me().id, kind: 'human', action: 'signed out of the workspace', obj: 'Sign-in' }); STATE.session = null; save(); closeSheet(); if (typeof API_CLIENT !== 'undefined' && API_CLIENT.connected) { API_CLIENT.flush().finally(() => API_CLIENT.signOut()); } navTo('#/login'); toast('Signed out', 'code', 'lock'); }; $$('[data-p]', el).forEach(r => r.onclick = () => {
+      if (typeof API_CLIENT !== 'undefined' && API_CLIENT.connected && r.dataset.p !== STATE.persona) { closeSheet(); return toast('You are signed in as ' + me().short + '. Sign out and sign in as the other person to switch.', 'warn', 'lock'); }
       STATE.persona = r.dataset.p; save(); closeSheet(); renderShell(); route();
       const p = me(); toast(`Now using CA Firm OS as ${p.short} · ${ROLES[p.role].name} — ${visibleClients().length} clients visible`, 'code', 'user');
     }); }

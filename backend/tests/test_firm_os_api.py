@@ -25,23 +25,12 @@ def db_session():
     yield db
     db.close()
 
-def test_firm_os_state_lifecycle(db_session):
-    # 1. Sync sample state
-    sample_state = {
-        "firm_name": "Nallamala & Co.",
-        "persona": "srinivas",
-        "obligations": [{"id": "ob-1", "form": "GSTR-3B", "state": "preparing"}],
-        "gates": [{"id": "q01", "gate": "G7", "status": "pending", "amount": 3842600}]
-    }
-    sync_req = StateSyncRequest(state=sample_state, synced_by="srinivas")
-    sync_resp = sync_firm_state(sync_req, db_session)
-    assert sync_resp["status"] == "success"
-    assert len(sync_resp["hash"]) == 64
-
-    # 2. Retrieve state
-    get_resp = get_firm_state(db_session)
-    assert get_resp["status"] == "success"
-    assert get_resp["state"]["firm_name"] == "Nallamala & Co."
+def test_whole_state_sync_is_retired(db_session):
+    # Phase 1: the tracker saves individual records via /api/v1/ops; whole-blob overwrites are refused.
+    sync_req = StateSyncRequest(state={"obligations": []}, synced_by="srinivas")
+    with pytest.raises(HTTPException) as exc_info:
+        sync_firm_state(sync_req, db_session)
+    assert exc_info.value.status_code == 410
 
 def test_four_eyes_invariant_enforcement(db_session):
     # Violation: Preparer attempts to review their own return at G6

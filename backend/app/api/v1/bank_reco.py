@@ -22,7 +22,10 @@ from ...deterministic_core.tally_inbound import SafeTallyXMLParser, TallyInbound
 from ...deterministic_core.tally_bridge import generate_tally_purchase_xml
 from ...deterministic_core.seed_data import SAMPLE_PURCHASE_BILLS
 
-router = APIRouter(prefix="/bank-reco", tags=["bank-reconciliation-and-tally"])
+from ..deps import get_current_user
+
+# Phase 1: signed session required for every route.
+router = APIRouter(prefix="/bank-reco", tags=["bank-reconciliation-and-tally"], dependencies=[Depends(get_current_user)])
 
 DEFAULT_FIRM_ID = "nallamala-co"
 

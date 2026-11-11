@@ -70,6 +70,8 @@ const TEAM = [
   { id: 'rohit', name: 'Rohit Jain', short: 'Rohit', role: 'AR', color: '#4D5566', focus: 'Article · year 3 · direct tax', since: 2024, cost: 10000, article: { start: '2024-03-18', reg: 'Form 103 · registered', stipend: 10000, study: 22 }, status: 'Study leave' },
   { id: 'imran', name: 'Imran Shaikh', short: 'Imran', role: 'FO', color: '#585A5F', focus: 'Front office · inward / outward · DSC custody', since: 2019, cost: 28000, status: 'In office' }
 ];
+/* Untouched copy of the demo team: TEAM itself is replaced by the firm's staff once signed in. */
+const TEAM_SEED = TEAM.map(t => ({ ...t }));
 
 /* ---------- clients ---------- */
 const CLIENTS = [
@@ -189,32 +191,36 @@ const GATE_ITEMS = [
 ];
 
 /* ---------- connectors ---------- */
+/* Status reflects what is actually built today (Phase 0 audit, Nov 2026):
+   'Live' = working end to end · 'Partial' = some of the scope works · 'File import' = upload/download works, no live link
+   'Simulated' = sandbox responses only · 'Not built' · 'By design: …' = a person files, by policy. */
 const CONNECTORS = [
-  ['GSTN via GSP', 'Government', 'api', 'Healthy', 'GSTR-1/3B/9 filing, 2A/2B/IMS pull, ledgers', '2 min', '82% of quota'],
-  ['Income-tax e-filing (ERI)', 'Government', 'api', 'Healthy', 'ITR upload, AIS/TIS/26AS, pre-fill, e-verify', '6 min', '41%'],
-  ['e-Invoice IRP', 'Government', 'api', 'Healthy', 'IRN generation & 30-day watch', '1 min', '23%'],
-  ['e-Way bill', 'Government', 'api', 'Healthy', 'EWB generation & reconciliation', '3 min', '18%'],
-  ['TRACES / TIN-NSDL', 'Government', 'file', 'Healthy', 'FVU validation, Form 16/16A download, defaults', '1 h', '—'],
-  ['MCA V3', 'Government', 'pack', 'By design: human files', 'Schema-validated packs only — no automation', '—', '—'],
-  ['EPFO · ESIC', 'Government', 'pack', 'By design: human files', 'ECR & challan files for upload', '—', '—'],
-  ['ICAI UDIN portal', 'Professional', 'pack', 'By design: human-started', 'UDIN recorded back against the report', '—', '—'],
-  ['Tally Prime (desktop)', 'Accounting', 'api', 'Healthy', 'Bridge app on client PC · vouchers & masters', '15 min', '—'],
-  ['Zoho Books', 'Accounting', 'api', 'Healthy', 'OAuth · journals, bills, invoices', '5 min', '12%'],
-  ['Busy', 'Accounting', 'file', 'Degraded', 'Export import · 2 clients on v21', '1 day', '—'],
-  ['QuickBooks', 'Accounting', 'api', 'Healthy', 'OAuth · GL, AR/AP', '10 min', '6%'],
-  ['SAP / NetSuite / Oracle', 'Accounting', 'file', 'Healthy', 'Scheduled GL & sub-ledger extracts', '1 day', '—'],
-  ['Account Aggregator (bank feeds)', 'Banking', 'api', 'Healthy', 'Consent-based statements for 31 accounts', '1 h', '—'],
-  ['WhatsApp Business', 'Client channels', 'api', 'Healthy', 'Inbound documents, CL-1, automations', 'live', '—'],
-  ['Email (Google Workspace / M365)', 'Client channels', 'api', 'Healthy', 'Inbound mail-drop & outbound', 'live', '—'],
-  ['Client portal & app', 'Client channels', 'api', 'Healthy', 'Uploads, status, approvals, payments', 'live', '—'],
-  ['SMS (DLT registered)', 'Client channels', 'api', 'Healthy', 'Reminders on DLT templates', 'live', '—'],
-  ['DigiLocker', 'Identity', 'api', 'Healthy', 'KYC pulls with consent', 'on demand', '—'],
-  ['DSC / emSigner', 'Identity', 'api', 'Healthy', 'Signing utility — PIN never stored', 'on demand', '—'],
-  ['Razorpay / UPI', 'Payments', 'api', 'Healthy', 'Fee collection links & reconciliation', 'live', '—'],
-  ['Google Drive / SharePoint', 'Storage', 'api', 'Paused', 'Legacy archive import (read-only)', '—', '—'],
-  ['DGFT · ICEGATE', 'Government', 'pack', 'By design: human files', 'IEC, RoDTEP, shipping-bill data', '—', '—'],
-  ['RBI FIRMS', 'Government', 'pack', 'By design: human files', 'FC-GPR / FC-TRS packs', '—', '—']
-].map(([name, cat, mode, status, scope, sync, quota], i) => ({ id: 'cx' + i, name, cat, mode, status, scope, sync, quota, on: status !== 'Paused' }));
+  ['GSTN via GSP', 'Government', 'api', 'Simulated', 'Sandbox responses only — no GSP credentials or live calls yet'],
+  ['Income-tax e-filing (ERI)', 'Government', 'api', 'Not built', 'ITR upload, AIS/TIS/26AS, pre-fill, e-verify'],
+  ['e-Invoice IRP', 'Government', 'api', 'Not built', 'IRN generation & 30-day watch'],
+  ['e-Way bill', 'Government', 'api', 'Not built', 'EWB generation & reconciliation'],
+  ['TRACES / TIN-NSDL', 'Government', 'file', 'Not built', 'FVU validation, Form 16/16A download, defaults'],
+  ['MCA V3', 'Government', 'pack', 'By design: human files', 'Schema-validated packs only — no automation'],
+  ['EPFO · ESIC', 'Government', 'pack', 'By design: human files', 'ECR & challan files for upload'],
+  ['ICAI UDIN portal', 'Professional', 'pack', 'By design: human-started', 'UDIN recorded back against the report'],
+  ['Tally Prime (desktop)', 'Accounting', 'file', 'File import', 'Trial balance XML import and purchase-voucher XML export work · live desktop bridge not built'],
+  ['Winman', 'Accounting', 'file', 'Not built', 'Client master / return status exchange — integration route still to be decided'],
+  ['Zoho Books', 'Accounting', 'api', 'Not built', 'OAuth · journals, bills, invoices'],
+  ['Busy', 'Accounting', 'file', 'Not built', 'Export import'],
+  ['QuickBooks', 'Accounting', 'api', 'Not built', 'OAuth · GL, AR/AP'],
+  ['SAP / NetSuite / Oracle', 'Accounting', 'file', 'Not built', 'Scheduled GL & sub-ledger extracts'],
+  ['Bank statements', 'Banking', 'file', 'File import', 'Bank CSV upload + reconciler work · Account Aggregator consent feed not built'],
+  ['WhatsApp Business', 'Client channels', 'api', 'Not built', 'Document requests, reminders, inbound documents and replies'],
+  ['Email', 'Client channels', 'api', 'Partial', 'Sign-in codes are sent (Resend / SMTP) · client outreach and inbound mail not built'],
+  ['Client portal & app', 'Client channels', 'api', 'Not built', 'Portal screens are a demo; no backend behind them yet'],
+  ['SMS (DLT registered)', 'Client channels', 'api', 'Partial', 'Sign-in OTP via Fast2SMS / Twilio · reminders not built'],
+  ['DigiLocker', 'Identity', 'api', 'Not built', 'KYC pulls with consent'],
+  ['DSC / desktop signer', 'Identity', 'api', 'Partial', 'Backend certificate + revocation checks built · desktop signer app and this screen not wired'],
+  ['Razorpay / UPI', 'Payments', 'api', 'Not built', 'Fee collection links & reconciliation'],
+  ['Google Drive / SharePoint', 'Storage', 'api', 'Not built', 'Legacy archive import (read-only)'],
+  ['DGFT · ICEGATE', 'Government', 'pack', 'By design: human files', 'IEC, RoDTEP, shipping-bill data'],
+  ['RBI FIRMS', 'Government', 'pack', 'By design: human files', 'FC-GPR / FC-TRS packs']
+].map(([name, cat, mode, status, scope], i) => ({ id: 'cx' + i, name, cat, mode, status, scope, sync: '—', quota: '—', on: ['Live', 'Partial', 'File import'].includes(status) }));
 
 /* ---------- rulebook ---------- */
 const RULES = [

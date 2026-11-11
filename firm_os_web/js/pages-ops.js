@@ -134,70 +134,41 @@ VIEWS.recon = {
     const ask = $('#ask-all', el); if (ask) ask.onclick = () => { BANK_UNMATCHED.forEach((_, i) => { if (!STATE.bank[i]) STATE.bank[i] = 'ask'; }); ledgerAdd({ actor: 'IN-4', kind: 'agent', action: 'sent all open bank questions to the client in one message', client: 'c01', obj: 'Bank reconciliation' }); save(); toast('One consolidated message sent to K. Raghava', 'client', 'send'); rerender(); };
     const g4 = $('#to-g4', el); if (g4) g4.onclick = () => openApproval('q04');
     
-    // Live Reconciler Buttons
+    // Live reconciler buttons — real backend calls only; no fabricated results.
+    const backendDown = (res) => toast(`Backend not reachable — nothing was reconciled (${esc((res && res.detail) || 'no response')})`, 'bad', 'alert');
+    const hasApi = typeof API_CLIENT !== 'undefined';
+    const pickText = (accept, cb) => { const inp = document.createElement('input'); inp.type = 'file'; inp.accept = accept; inp.onchange = () => { const f = inp.files && inp.files[0]; if (!f) return; const r = new FileReader(); r.onload = () => cb(String(r.result || ''), f.name); r.readAsText(f); }; inp.click(); };
+
     const btnLoad = $('#btn-load-sample', el);
-    if (btnLoad) btnLoad.onclick = async () => {
-      toast('Loading HDFC Bank Statement sample...', 'agent', 'download');
-      LIVE_RECO_RESULT = {
-        status: 'READY_TO_RECONCILE',
-        client_name: 'Surya Enterprises Pvt Ltd',
-        total_bank_transactions: 8,
-        matched_count: 6,
-        unmatched_bank_count: 2,
-        reconciliation_percentage: 75.0,
-        bank_closing_balance: 614480.00,
-        net_variance: 17700.00,
-        sqc1_audit_hash: '9f8a2b4e8c1d3f5a7e6b0c2d4f8a1e3b5c7d9e0f',
-        pass_counts: { pass1_exact_ref: 3, pass2_exact_amount: 1, pass3_batch_split: 1, pass4_fuzzy_counterparty: 1, pass6_bank_charges: 1 },
-        tax_audit_alerts: [{ message: 'Sec 194J Professional fees detected for Apex Infotech (TDS required)' }]
-      };
-      rerender();
-      toast('Sample loaded: 8 transactions ready for 6-pass execution', 'ok', 'check');
-    };
+    if (btnLoad) btnLoad.onclick = () => pickText('.csv,text/csv', async (csv, name) => {
+      if (!hasApi) return backendDown();
+      const res = await API_CLIENT.parseBankCSV(csv);
+      if (!res || res.status !== 'PARSED_SUCCESSFULLY') return backendDown(res);
+      LIVE_BANK_TXNS = { name, txns: res.transactions };
+      LIVE_RECO_RESULT = null; rerender();
+      toast(`${res.total_transactions} transactions read from ${esc(name)} — run the engine next`, 'ok', 'check');
+    });
 
     const btnRun = $('#btn-run-reco', el);
     if (btnRun) btnRun.onclick = async () => {
-      toast('Executing 6-pass deterministic reconciler against FastAPI backend...', 'agent', 'zap');
-      if (typeof API_CLIENT !== 'undefined' && API_CLIENT.runBankReconciliation) {
-        const res = await API_CLIENT.runBankReconciliation({});
-        if (res && res.status === 'SUCCESS') {
-          LIVE_RECO_RESULT = res;
-          rerender();
-          toast(`Reconciliation Complete: ${res.matched_count} matched (${res.reconciliation_percentage}%)`, 'ok', 'check');
-          return;
-        }
-      }
-      // Fallback with live calculated values
-      LIVE_RECO_RESULT = {
-        status: 'SUCCESS',
-        client_name: 'Surya Enterprises Pvt Ltd',
-        total_bank_transactions: 8,
-        matched_count: 6,
-        unmatched_bank_count: 2,
-        reconciliation_percentage: 85.7,
-        bank_closing_balance: 614480.00,
-        net_variance: 17700.00,
-        sqc1_audit_hash: 'a1b2c3d4e5f67890123456789abcdef012345678',
-        pass_counts: { pass1_exact_ref: 3, pass2_exact_amount: 1, pass3_batch_split: 1, pass4_fuzzy_counterparty: 1, pass6_bank_charges: 1 },
-        tax_audit_alerts: [{ message: 'Sec 194C freight payment to Gujarat Express Roadlines logged to Form 3CD' }]
-      };
-      rerender();
-      toast('6-Pass Reconciler Succeeded (SQC-1 Cryptographic Block generated)', 'ok', 'check');
+      if (!hasApi) return backendDown();
+      toast('Running the reconciler on the backend…', 'agent', 'zap');
+      const payload = LIVE_BANK_TXNS ? { bank_transactions: LIVE_BANK_TXNS.txns } : {};
+      const res = await API_CLIENT.runBankReconciliation(payload);
+      if (!res || res.status !== 'SUCCESS') return backendDown(res);
+      res.client_name = LIVE_BANK_TXNS ? LIVE_BANK_TXNS.name : 'Backend sample statement (HDFC)';
+      LIVE_RECO_RESULT = res; rerender();
+      toast(`Reconciliation complete: ${res.matched_count} of ${res.total_bank_transactions} matched (${res.reconciliation_percentage}%)`, 'ok', 'check');
     };
 
     const btnTally = $('#btn-tally-sync', el);
-    if (btnTally) btnTally.onclick = async () => {
-      toast('Syncing purchase vouchers with Tally XML bridge...', 'agent', 'plug');
-      const sampleXML = '<ENVELOPE><HEADER><TALLYREQUEST>Export Data</TALLYREQUEST></HEADER><BODY><IMPORTDATA><REQUESTDATA><VOUCHER VCHTYPE="Purchase"><DATE>20260904</DATE><PARTYNAME>Maharashtra Cotton Mills Ltd</PARTYNAME><AMOUNT>252000.00</AMOUNT></VOUCHER></REQUESTDATA></IMPORTDATA></BODY></ENVELOPE>';
-      if (typeof API_CLIENT !== 'undefined' && API_CLIENT.parseTallyXML) {
-        const res = await API_CLIENT.parseTallyXML(sampleXML);
-        if (res && res.status === 'PARSED_SUCCESSFULLY') {
-          toast(`Tally Sync Verified: ${res.total_vouchers} vouchers parsed from TallyPrime`, 'ok', 'check');
-          return;
-        }
-      }
-      toast('Tally XML Bridge: 14 ledgers & purchase vouchers synced into memory', 'ok', 'plug');
-    };
+    if (btnTally) btnTally.onclick = () => pickText('.xml,text/xml,application/xml', async (xml, name) => {
+      if (!hasApi) return backendDown();
+      const res = await API_CLIENT.parseTallyXML(xml);
+      if (!res || res.status !== 'PARSED_SUCCESSFULLY') return toast(`Tally XML not imported: ${esc((res && res.detail) || 'backend not reachable')}`, 'bad', 'alert');
+      if (!res.total_ledgers) return toast(`No ledgers found in ${esc(name)} — export the Trial Balance from TallyPrime as XML and try again`, 'warn', 'alert');
+      toast(`${esc(name)}: ${res.total_ledgers} ledgers read · ${res.is_balanced ? 'trial balance tallies' : 'difference ' + inr(res.difference, 2)} · ${res.anomalies_detected} anomalies`, res.is_balanced ? 'ok' : 'warn', 'plug');
+    });
   }
 };
 const RECON_CHIP = { 'Matched': 'ok', 'Value mismatch': 'warn', 'Duplicate in books': 'warn', 'Supplier not filed': 'bad', 'Missing in books': 'client', 'Blocked 17(5)': 'bad', 'RCM — self-invoice': 'outline', 'Unregistered': 'outline' };
@@ -247,6 +218,7 @@ function mountIMS(el) {
   };
 }
 let LIVE_RECO_RESULT = null;
+let LIVE_BANK_TXNS = null;
 
 function reconBank() {
   const result = LIVE_RECO_RESULT;
@@ -269,34 +241,31 @@ function reconBank() {
     </div>
     <div class="card kpi accent-agent">
       <div class="label">Auto-posted by rule</div>
-      <div class="value">${result ? (result.pass_counts ? result.pass_counts.pass6_bank_charges : 12) : '61'}</div>
-      <div class="foot">Pass 5 TDS & Pass 6 Bank Charges</div>
+      <div class="value">${result ? ((result.pass_counts?.p3 || 0) + (result.pass_counts?.p4 || 0) + (result.pass_counts?.p5 || 0)) : '61'}</div>
+      <div class="foot">Passes 3–5: TDS, challans, charges</div>
     </div>
   </div>
 
   <!-- Live 6-Pass Reconciler & Tally Controls -->
   <div class="card mb16">
     <div class="card-h">
-      <h3>${icon('zap')} Production 6-Pass Deterministic Reconciler & Tally XML Bridge
-        <small>Executes Pass 1 (Chq Ref), Pass 2 (Exact Amt), Pass 3 (Batch/Split), Pass 4 (Fuzzy Narration), Pass 5 (TDS 194J/194C), Pass 6 (Charges)</small>
+      <h3>${icon('zap')} Bank reconciler & Tally trial balance import
+        <small>${LIVE_BANK_TXNS ? esc(LIVE_BANK_TXNS.name) + ' loaded · ' + LIVE_BANK_TXNS.txns.length + ' transactions' : 'No statement uploaded — Run uses the backend sample statement'} · Pass 1 Ref/UTR, 2 Amount+party, 3 Net of TDS, 4 Tax challans, 5 Bank charges</small>
       </h3>
       <div class="right flex" style="gap:8px">
-        <button class="btn sm" id="btn-load-sample">${icon('download')} Load HDFC Sample</button>
-        <button class="btn sm gate" id="btn-run-reco">${icon('play')} Run 6-Pass Engine</button>
-        <button class="btn sm outline" id="btn-tally-sync">${icon('plug')} Inbound Tally XML</button>
+        <button class="btn sm" id="btn-load-sample">${icon('upload')} Upload bank CSV</button>
+        <button class="btn sm gate" id="btn-run-reco">${icon('play')} Run reconciler</button>
+        <button class="btn sm outline" id="btn-tally-sync">${icon('plug')} Import Tally trial balance XML</button>
       </div>
     </div>
     <div class="card-b" id="live-reco-status" style="display:${result ? 'block' : 'none'};background:var(--bg-2);border-radius:var(--r);margin:12px;padding:12px">
       ${result ? `
         <div class="flex between wrap mb8">
-          <div><b>Deterministic Reconciler Status:</b> <span class="chip ok">${result.status}</span> · Client: <b>${esc(result.client_name || 'Surya Enterprises')}</b></div>
+          <div><b>Deterministic Reconciler Status:</b> <span class="chip ok">${result.status}</span> · Statement: <b>${esc(result.client_name || '')}</b></div>
           <div class="mono tiny muted">Audit Hash: <b>${esc((result.sqc1_audit_hash || '').slice(0, 16))}...</b></div>
         </div>
         <div class="grid g4" style="gap:8px">
-          <div class="card pad" style="padding:8px"><b>Pass 1 Ref:</b> ${result.pass_counts?.pass1_exact_ref || 0}</div>
-          <div class="card pad" style="padding:8px"><b>Pass 2 Amount:</b> ${result.pass_counts?.pass2_exact_amount || 0}</div>
-          <div class="card pad" style="padding:8px"><b>Pass 3 Split:</b> ${result.pass_counts?.pass3_batch_split || 0}</div>
-          <div class="card pad" style="padding:8px"><b>Pass 4 Fuzzy:</b> ${result.pass_counts?.pass4_fuzzy_counterparty || 0}</div>
+          ${[['p1', 'Pass 1 · Ref / UTR'], ['p2', 'Pass 2 · Amount + party'], ['p3', 'Pass 3 · Net of TDS'], ['p4', 'Pass 4 · Tax challans'], ['p5', 'Pass 5 · Bank charges']].map(([k, n]) => `<div class="card pad" style="padding:8px"><b>${n}:</b> ${result.pass_counts?.[k] || 0}</div>`).join('')}
         </div>
         ${result.tax_audit_alerts?.length ? `
           <div class="callout warn mt12" style="margin-bottom:0">
@@ -556,7 +525,7 @@ VIEWS.clients = {
       can('onboard') || can('all_clients') ? `<button class="btn primary" id="onb">${icon('plus')} Onboard a client</button>` : '') + `
     <div class="flex wrap mb16" style="gap:10px"><div class="seg">${[['all', 'All'], ['co', 'Companies'], ['firm', 'LLPs & firms'], ['ind', 'Individuals'], ['ngo', 'Trusts & societies']].map(([k, n]) => `<button class="${CL_F.seg === k ? 'on' : ''}" data-seg="${k}">${n} <span class="n">${all.filter(CL_SEGS[k]).length}</span></button>`).join('')}</div><input class="input" id="cl-q" placeholder="Search name, PAN or GSTIN" value="${esc(CL_F.q)}" style="max-width:260px;height:36px"></div>
     <div class="card"><div class="table-wrap"><table class="t"><thead><tr><th>Client</th><th>GST</th><th>Preparer</th><th>Open</th><th>Next deadline</th><th>Documents</th><th>Health</th>${can('billing') ? '<th class="r">Annual fee</th>' : ''}</tr></thead><tbody>
-    ${cs.map(c => { const obs = STATE.obligations.filter(o => o.client === c.id && o.state !== 'closed'); const nx = obs.filter(o => daysTo(o.due) >= 0).sort((a, b) => a.due.localeCompare(b.due))[0]; const late = obs.filter(o => daysTo(o.due) < 0 && o.state !== 'filed').length; const waiting = obs.filter(o => o.state === 'awaiting').reduce((s, o) => s + (o.docs[0] - o.docs[1]), 0); const prep = c.team[0] || c.manager; const gst = c.tags.includes('gstm') ? 'Monthly' : c.tags.includes('gstq') ? 'Quarterly' : c.tags.includes('comp') ? 'Composition' : '—'; const id = c.gstin ? c.gstin.slice(0, 7) + '••••' + c.gstin.slice(-3) : c.pan.slice(0, 3) + '••••' + c.pan.slice(-2);
+    ${cs.map(c => { const obs = STATE.obligations.filter(o => o.client === c.id && o.state !== 'closed'); const nx = obs.filter(o => daysTo(o.due) >= 0).sort((a, b) => a.due.localeCompare(b.due))[0]; const late = obs.filter(o => daysTo(o.due) < 0 && o.state !== 'filed').length; const waiting = obs.filter(o => o.state === 'awaiting').reduce((s, o) => s + (o.docs[0] - o.docs[1]), 0); const prep = c.team[0] || c.manager; const gst = c.tags.includes('gstm') ? 'Monthly' : c.tags.includes('gstq') ? 'Quarterly' : c.tags.includes('comp') ? 'Composition' : '—'; const id = c.gstin ? c.gstin.slice(0, 7) + '••••' + c.gstin.slice(-3) : c.pan ? c.pan.slice(0, 3) + '••••' + c.pan.slice(-2) : '—';
       return `<tr class="click" data-c="${c.id}"><td><b>${esc(c.name)}</b><span class="sub">${esc(c.type)} · ${esc(c.city)} · <span class="mono">${esc(id)}</span></span></td><td class="small">${gst}</td><td><span class="flex">${avatar(prep, 'sm')}<span class="small">${esc(actorName(prep))}</span></span></td><td><span class="num">${obs.length}</span>${late ? ` <span class="chip bad">${late} overdue</span>` : ''}</td><td>${nx ? `<span class="flex">${formChip(nx.form, nx.d)}<span class="small num">${fmtD(nx.due)}</span></span>` : '—'}</td><td>${waiting ? `<span class="chip warn">${waiting} waiting</span>` : '<span class="chip ok">Up to date</span>'}</td><td><div class="ring sm" style="--p:${c.health};--c:var(--${c.health >= 80 ? 'ok' : c.health >= 65 ? 'warn' : 'bad'})"><b>${c.health}</b></div></td>${can('billing') ? `<td class="r num">${inr(c.fee)}</td>` : ''}</tr>`; }).join('')}
     </tbody></table></div></div>`;
   },

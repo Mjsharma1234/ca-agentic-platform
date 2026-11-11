@@ -488,23 +488,21 @@ VIEWS.login = {
     const redraw = () => { el.innerHTML = VIEWS.login.render(); VIEWS.login.mount(el); };
     $$('[data-sm]', el).forEach(b => b.onclick = () => { STAFF.method = b.dataset.sm; redraw(); });
     $('#st-demo', el).onchange = e => { STAFF.user = e.target.value; STAFF.step = 'id'; STAFF.err = ''; redraw(); };
-    const send = $('#st-send', el); if (send) send.onclick = async () => {
+    const requestCode = async (identifier, channel) => {
+      STAFF.identifier = identifier; STAFF.step = 'code'; STAFF.tries = 4; STAFF.err = '';
+      if (backendUp()) {
+        const res = await API_CLIENT.requestOTP(identifier, channel);
+        if (res && res.status === 'error') { STAFF.step = 'id'; STAFF.err = res.detail || 'Could not send a code.'; redraw(); return; }
+        if (res && res.dev_otp) toast(`Sandbox code (local development only): ${res.dev_otp}`, 'code', 'info');
+      }
+      redraw(); toast(channel === 'EMAIL' ? `Verification code sent to ${identifier}` : `OTP sent via SMS to ${identifier}`, 'code', channel === 'EMAIL' ? 'mail' : 'phone');
+    };
+    const send = $('#st-send', el); if (send) send.onclick = () => {
       const v = $('#st-email', el).value.trim().toLowerCase(); const p = TEAM.find(t => staffEmail(t) === v) || TEAM[0];
-      STAFF.user = p.id; STAFF.identifier = v; STAFF.step = 'code'; STAFF.tries = 4; STAFF.err = '';
-      if (typeof API_CLIENT !== 'undefined' && API_CLIENT.requestOTP) {
-        API_CLIENT.requestOTP(v, 'EMAIL');
-      }
-      redraw(); toast(`Verification code sent to ${v}`, 'code', 'mail');
+      STAFF.user = p.id; requestCode(v, 'EMAIL');
     };
-    const sendPhone = $('#st-send-phone', el); if (sendPhone) sendPhone.onclick = async () => {
-      const phone = $('#st-phone', el).value.trim();
-      STAFF.identifier = phone; STAFF.step = 'code'; STAFF.tries = 4; STAFF.err = '';
-      if (typeof API_CLIENT !== 'undefined' && API_CLIENT.requestOTP) {
-        API_CLIENT.requestOTP(phone, 'SMS');
-      }
-      redraw(); toast(`OTP sent via SMS to ${phone}`, 'ok', 'phone');
-    };
-    $$('#st-sso, #st-sso2', el).forEach(b => b.onclick = () => staffSignIn(person(STAFF.user), b.dataset.p));
+    const sendPhone = $('#st-send-phone', el); if (sendPhone) sendPhone.onclick = () => requestCode($('#st-phone', el).value.trim(), 'SMS');
+    $$('#st-sso, #st-sso2', el).forEach(b => b.onclick = () => demoSignIn(person(STAFF.user), b.dataset.p, redraw));
     const otp = $$('#sotp input', el);
     otp.forEach((inp, i) => {
       inp.oninput = () => { inp.value = inp.value.replace(/\D/g, '').slice(-1); if (inp.value && otp[i + 1]) otp[i + 1].focus(); if (otp.every(x => x.value)) $('#st-verify', el).click(); };
@@ -515,12 +513,18 @@ VIEWS.login = {
     const fill = $('#st-fill', el); if (fill) fill.onclick = () => { DEMO_OTP.split('').forEach((c, k) => otp[k].value = c); $('#st-verify', el).click(); };
     const ver = $('#st-verify', el); if (ver) ver.onclick = async () => {
       const entered = otp.map(x => x.value).join('');
-      if (entered === DEMO_OTP) return staffSignIn(person(STAFF.user), 'demo OTP code');
-      if (typeof API_CLIENT !== 'undefined' && API_CLIENT.verifyOTP) {
+      if (entered === DEMO_OTP) return demoSignIn(person(STAFF.user), 'demo OTP code', redraw);
+      if (backendUp()) {
         const res = await API_CLIENT.verifyOTP(STAFF.identifier || staffEmail(person(STAFF.user)), entered);
         if (res && res.access_token) {
-          toast('OTP Authenticated via FastAPI Backend (JWT issued)', 'ok', 'shield');
-          return staffSignIn(person(STAFF.user), 'live OTP SMS');
+          try {
+            const meStaff = await API_CLIENT.openWorkspace();
+            return staffSignIn(person(meStaff.id), 'one-time code');
+          } catch (e) {
+            API_CLIENT.setToken(null);
+            STAFF.err = e.status === 403 ? 'This account is not a member of firm staff.' : `Signed in, but the workspace did not load: ${e.message}`;
+            redraw(); return;
+          }
         }
       }
       STAFF.tries--; STAFF.err = STAFF.tries > 0 ? `That code doesn't match. ${STAFF.tries} ${STAFF.tries === 1 ? 'try' : 'tries'} left.` : 'Too many wrong codes. Ask the managing partner to unlock your account.'; redraw(); $('#sotp', el)?.classList.add('shake');
@@ -528,6 +532,21 @@ VIEWS.login = {
     const back = $('#st-back', el); if (back) back.onclick = () => { STAFF.step = 'id'; STAFF.err = ''; redraw(); };
   }
 };
+const backendUp = () => typeof API_CLIENT !== 'undefined' && API_CLIENT.isOnline;
+/* Demo personas: with a backend, ask it for a development session (refused on production servers);
+   without one, sign in locally as before (offline demo). */
+async function demoSignIn(p, how, redraw) {
+  if (!backendUp()) return staffSignIn(p, how);
+  try {
+    await API_CLIENT.devLogin(p);
+    const meStaff = await API_CLIENT.openWorkspace({ autoDemo: true });
+    return staffSignIn(person(meStaff.id) || p, how);
+  } catch (e) {
+    API_CLIENT.setToken(null);
+    STAFF.err = e.status === 404 ? 'Demo sign-in is turned off on this server. Sign in with your email or phone.' : `Sign-in failed: ${e.message}`;
+    STAFF.step = 'id'; if (redraw) redraw();
+  }
+}
 function staffSignIn(p, how) {
   STATE.session = { user: p.id, since: new Date().toISOString(), how };
   STATE.persona = p.id; STAFF.step = 'id'; STAFF.err = '';
