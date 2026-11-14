@@ -446,8 +446,24 @@ const staffEmail = p => p.id + '@nallamala.example';
 VIEWS.login = {
   render() {
     const u = person(STAFF.user);
+    const fb = typeof API_CLIENT !== 'undefined' && API_CLIENT.firebaseMode;
+    const fbReady = fb && API_CLIENT.authConfig.firebase_web_ready;
+    const errBox = STAFF.err ? `<div class="callout bad mt12">${icon('alert')}<div>${esc(STAFF.err)}</div></div>` : '';
     let step = '';
-    if (STAFF.step === 'id') {
+    if (fb && STAFF.step === 'id') {
+      step = `<label class="small" style="font-weight:600;color:var(--ink-2)" for="st-fb-phone">Your mobile number</label>
+        <input class="input mt8" id="st-fb-phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="98765 43210" value="${esc(STAFF.identifier || '')}" style="height:50px;font-size:16px">
+        <button class="btn primary lg block mt12" id="st-fb-send" ${fbReady ? '' : 'disabled'}>Send code by SMS ${icon('arrow')}</button>
+        <div id="fb-recaptcha"></div>
+        ${fbReady ? '' : `<div class="callout warn mt12">${icon('alert')}<div class="small">Firebase sign-in is switched on but the web app is not configured on the server. Set <b>FIREBASE_WEB_API_KEY</b> and <b>FIREBASE_APP_ID</b>.</div></div>`}
+        ${errBox}
+        <p class="tiny muted mt8">Use the mobile number your firm registered for you. Standard SMS rates may apply. By continuing you agree that your number is sent to Google (Firebase) to deliver the code and for spam and abuse prevention.</p>`;
+    } else if (fb) {
+      step = `<p class="dim" style="margin:0">We sent a 6-digit code to <b>${esc(STAFF.identifier || '')}</b>.</p><label class="sr" for="sotp0">Enter the 6-digit code</label><div class="otp" id="sotp">${[...Array(6)].map((_, i) => `<input id="sotp${i}" inputmode="numeric" maxlength="1" autocomplete="${i ? 'off' : 'one-time-code'}" aria-label="Digit ${i + 1}">`).join('')}</div>
+        ${errBox}
+        <button class="btn primary lg block mt12" id="st-verify">Verify and sign in</button>
+        <button class="btn ghost sm block mt8" id="st-back">Use a different number</button>`;
+    } else if (STAFF.step === 'id') {
       step = `<div class="seg mb16" style="width:100%">${[['phone', 'Mobile OTP (SMS)'], ['email', 'Work email · code'], ['sso', 'Google / Microsoft']].map(([k, n]) => `<button class="${STAFF.method === k ? 'on' : ''}" data-sm="${k}" style="flex:1">${n}</button>`).join('')}</div>` +
         (STAFF.method === 'phone'
           ? `<label class="small" style="font-weight:600;color:var(--ink-2)" for="st-phone">10-Digit Indian Mobile Number (+91)</label><input class="input mt8" id="st-phone" type="tel" placeholder="+91 98765 43210" value="${u ? (u.phone || '+919876543210') : '+919876543210'}" style="height:50px;font-size:16px"><button class="btn primary lg block mt12" id="st-send-phone">Send OTP via SMS ${icon('arrow')}</button>`
@@ -474,10 +490,10 @@ VIEWS.login = {
           <h2>Sign in to ${esc(FIRM.name)}</h2>
           <p class="small muted" style="margin:0 0 18px">For partners, managers, staff and articles of the firm.</p>
           ${step}
-          <div class="hr"></div>
+          ${fb ? '' : `<div class="hr"></div>
           <label class="upper muted mb8" for="st-demo" style="display:block">Try as a member of the firm</label>
           <select class="input" id="st-demo">${TEAM.map(t => `<option value="${t.id}" ${t.id === STAFF.user ? 'selected' : ''}>${esc(t.name)} · ${ROLES[t.role].name}</option>`).join('')}</select>
-          <p class="tiny muted mt8">Each role sees only what it is allowed to — try an article assistant to see the walls.</p>
+          <p class="tiny muted mt8">Each role sees only what it is allowed to — try an article assistant to see the walls.</p>`}
         </div>
         <a class="card pad door" href="#/portal"><span class="glyph client"></span><div style="flex:1;min-width:0"><b>Are you a client of ${esc(FIRM.name)}?</b><div class="small muted">Sign in to the client portal to send papers, approve, pay and see your filings.</div></div>${icon('chev', 'chev')}</a>
       </div></section>
@@ -487,24 +503,22 @@ VIEWS.login = {
     bindThemeBtn(el);
     const redraw = () => { el.innerHTML = VIEWS.login.render(); VIEWS.login.mount(el); };
     $$('[data-sm]', el).forEach(b => b.onclick = () => { STAFF.method = b.dataset.sm; redraw(); });
-    $('#st-demo', el).onchange = e => { STAFF.user = e.target.value; STAFF.step = 'id'; STAFF.err = ''; redraw(); };
-    const send = $('#st-send', el); if (send) send.onclick = async () => {
+    const demoSel = $('#st-demo', el); if (demoSel) demoSel.onchange = e => { STAFF.user = e.target.value; STAFF.step = 'id'; STAFF.err = ''; redraw(); };
+    const requestCode = async (identifier, channel) => {
+      STAFF.identifier = identifier; STAFF.step = 'code'; STAFF.tries = 4; STAFF.err = '';
+      if (backendUp()) {
+        const res = await API_CLIENT.requestOTP(identifier, channel);
+        if (res && res.status === 'error') { STAFF.step = 'id'; STAFF.err = res.detail || 'Could not send a code.'; redraw(); return; }
+        if (res && res.dev_otp) toast(`Sandbox code (local development only): ${res.dev_otp}`, 'code', 'info');
+      }
+      redraw(); toast(channel === 'EMAIL' ? `Verification code sent to ${identifier}` : `OTP sent via SMS to ${identifier}`, 'code', channel === 'EMAIL' ? 'mail' : 'phone');
+    };
+    const send = $('#st-send', el); if (send) send.onclick = () => {
       const v = $('#st-email', el).value.trim().toLowerCase(); const p = TEAM.find(t => staffEmail(t) === v) || TEAM[0];
-      STAFF.user = p.id; STAFF.identifier = v; STAFF.step = 'code'; STAFF.tries = 4; STAFF.err = '';
-      if (typeof API_CLIENT !== 'undefined' && API_CLIENT.requestOTP) {
-        API_CLIENT.requestOTP(v, 'EMAIL');
-      }
-      redraw(); toast(`Verification code sent to ${v}`, 'code', 'mail');
+      STAFF.user = p.id; requestCode(v, 'EMAIL');
     };
-    const sendPhone = $('#st-send-phone', el); if (sendPhone) sendPhone.onclick = async () => {
-      const phone = $('#st-phone', el).value.trim();
-      STAFF.identifier = phone; STAFF.step = 'code'; STAFF.tries = 4; STAFF.err = '';
-      if (typeof API_CLIENT !== 'undefined' && API_CLIENT.requestOTP) {
-        API_CLIENT.requestOTP(phone, 'SMS');
-      }
-      redraw(); toast(`OTP sent via SMS to ${phone}`, 'ok', 'phone');
-    };
-    $$('#st-sso, #st-sso2', el).forEach(b => b.onclick = () => staffSignIn(person(STAFF.user), b.dataset.p));
+    const sendPhone = $('#st-send-phone', el); if (sendPhone) sendPhone.onclick = () => requestCode($('#st-phone', el).value.trim(), 'SMS');
+    $$('#st-sso, #st-sso2', el).forEach(b => b.onclick = () => demoSignIn(person(STAFF.user), b.dataset.p, redraw));
     const otp = $$('#sotp input', el);
     otp.forEach((inp, i) => {
       inp.oninput = () => { inp.value = inp.value.replace(/\D/g, '').slice(-1); if (inp.value && otp[i + 1]) otp[i + 1].focus(); if (otp.every(x => x.value)) $('#st-verify', el).click(); };
@@ -512,15 +526,52 @@ VIEWS.login = {
       inp.onpaste = e => { const d = (e.clipboardData.getData('text') || '').replace(/\D/g, '').slice(0, 6); if (d.length) { e.preventDefault(); d.split('').forEach((c, k) => otp[k] && (otp[k].value = c)); if (d.length === 6) $('#st-verify', el).click(); } };
     });
     if (otp[0]) setTimeout(() => otp[0].focus(), 60);
+    const fbSend = $('#st-fb-send', el); if (fbSend) fbSend.onclick = async () => {
+      const raw = $('#st-fb-phone', el).value.trim(); const digits = raw.replace(/\D/g, '');
+      const phone = raw.startsWith('+') ? '+' + digits : digits.length === 10 ? '+91' + digits : digits.length === 12 && digits.startsWith('91') ? '+' + digits : '';
+      STAFF.identifier = raw; STAFF.err = '';
+      if (!phone) { STAFF.err = 'Enter a 10-digit Indian mobile number.'; redraw(); return; }
+      fbSend.disabled = true; fbSend.textContent = 'Sending…';
+      try {
+        await FIREBASE_LOGIN.sendCode(API_CLIENT.authConfig.firebase, phone, 'fb-recaptcha');
+        STAFF.identifier = phone; STAFF.step = 'code'; STAFF.tries = 4; redraw();
+        toast(`Code sent by SMS to ${phone}`, 'code', 'phone');
+      } catch (e) { STAFF.err = FIREBASE_LOGIN.describe(e); redraw(); }
+    };
     const fill = $('#st-fill', el); if (fill) fill.onclick = () => { DEMO_OTP.split('').forEach((c, k) => otp[k].value = c); $('#st-verify', el).click(); };
     const ver = $('#st-verify', el); if (ver) ver.onclick = async () => {
       const entered = otp.map(x => x.value).join('');
-      if (entered === DEMO_OTP) return staffSignIn(person(STAFF.user), 'demo OTP code');
-      if (typeof API_CLIENT !== 'undefined' && API_CLIENT.verifyOTP) {
+      if (typeof API_CLIENT !== 'undefined' && API_CLIENT.firebaseMode) {
+        if (STAFF.busy) return;            // typing the 6th digit submits; a click on Verify must not submit again
+        STAFF.busy = true; STAFF.err = ''; ver.disabled = true;
+        try {
+          const idToken = await FIREBASE_LOGIN.confirmCode(entered);
+          await API_CLIENT.firebaseSignIn(idToken);
+          const meStaff = await API_CLIENT.openWorkspace();
+          return staffSignIn(person(meStaff.id), 'phone code (Firebase)');
+        } catch (e) {
+          if (e && e.status) {          // the firm backend refused the sign-in
+            API_CLIENT.setToken(null);
+            STAFF.err = e.message; STAFF.step = 'id';
+          } else {
+            STAFF.err = FIREBASE_LOGIN.describe(e);
+            if (e && e.code === 'auth/code-expired') STAFF.step = 'id';
+          }
+          redraw(); return;
+        } finally { STAFF.busy = false; }
+      }
+      if (entered === DEMO_OTP) return demoSignIn(person(STAFF.user), 'demo OTP code', redraw);
+      if (backendUp()) {
         const res = await API_CLIENT.verifyOTP(STAFF.identifier || staffEmail(person(STAFF.user)), entered);
         if (res && res.access_token) {
-          toast('OTP Authenticated via FastAPI Backend (JWT issued)', 'ok', 'shield');
-          return staffSignIn(person(STAFF.user), 'live OTP SMS');
+          try {
+            const meStaff = await API_CLIENT.openWorkspace();
+            return staffSignIn(person(meStaff.id), 'one-time code');
+          } catch (e) {
+            API_CLIENT.setToken(null);
+            STAFF.err = e.status === 403 ? 'This account is not a member of firm staff.' : `Signed in, but the workspace did not load: ${e.message}`;
+            redraw(); return;
+          }
         }
       }
       STAFF.tries--; STAFF.err = STAFF.tries > 0 ? `That code doesn't match. ${STAFF.tries} ${STAFF.tries === 1 ? 'try' : 'tries'} left.` : 'Too many wrong codes. Ask the managing partner to unlock your account.'; redraw(); $('#sotp', el)?.classList.add('shake');
@@ -528,6 +579,21 @@ VIEWS.login = {
     const back = $('#st-back', el); if (back) back.onclick = () => { STAFF.step = 'id'; STAFF.err = ''; redraw(); };
   }
 };
+const backendUp = () => typeof API_CLIENT !== 'undefined' && API_CLIENT.isOnline;
+/* Demo personas: with a backend, ask it for a development session (refused on production servers);
+   without one, sign in locally as before (offline demo). */
+async function demoSignIn(p, how, redraw) {
+  if (!backendUp()) return staffSignIn(p, how);
+  try {
+    await API_CLIENT.devLogin(p);
+    const meStaff = await API_CLIENT.openWorkspace({ autoDemo: true });
+    return staffSignIn(person(meStaff.id) || p, how);
+  } catch (e) {
+    API_CLIENT.setToken(null);
+    STAFF.err = e.status === 404 ? 'Demo sign-in is turned off on this server. Sign in with your email or phone.' : `Sign-in failed: ${e.message}`;
+    STAFF.step = 'id'; if (redraw) redraw();
+  }
+}
 function staffSignIn(p, how) {
   STATE.session = { user: p.id, since: new Date().toISOString(), how };
   STATE.persona = p.id; STAFF.step = 'id'; STAFF.err = '';

@@ -17,6 +17,7 @@ from .api.v1.returns import router as returns_router
 from .api.v1.dashboard import router as dashboard_router
 from .api.v1.clients import router as clients_router
 from .api.v1.firm_os import router as firm_os_router
+from .api.v1.ops import router as ops_router
 from .api.v1.billing import router as billing_router
 from .api.v1.bank_reco import router as bank_reco_router
 from .api.v1.auth import router as auth_router
@@ -31,10 +32,14 @@ async def lifespan(app: FastAPI):
     enforce_rls_posture(engine, production=not settings.DEBUG)
     yield
 
+# The interactive docs and OpenAPI schema enumerate every route; keep them to local development.
 app = FastAPI(
     title=settings.APP_NAME,
     debug=settings.DEBUG,
-    lifespan=lifespan
+    lifespan=lifespan,
+    docs_url="/docs" if settings.DEBUG else None,
+    redoc_url="/redoc" if settings.DEBUG else None,
+    openapi_url="/openapi.json" if settings.DEBUG else None,
 )
 
 # 1. Security Headers Middleware
@@ -71,6 +76,7 @@ app.add_middleware(
 
 api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(firm_os_router)
+api_router.include_router(ops_router)
 api_router.include_router(gates_router)
 api_router.include_router(documents_router)
 api_router.include_router(returns_router, dependencies=[Depends(require_role("ARTICLE_TRAINEE"))])

@@ -89,6 +89,7 @@ export const api = {
     request<{ token_type: string; user: AuthUser }>("POST", "/auth/otp/verify", { identifier, otp }),
   verifyFirebaseToken: (idToken: string) =>
     request<{ token_type: string; user: AuthUser }>("POST", "/auth/firebase/verify", { id_token: idToken }),
+  getAuthConfig: () => request<{ login_provider: "otp" | "firebase"; firebase_enabled: boolean }>("GET", "/auth/config"),
   getMe: () => request<AuthUser>("GET", "/auth/me"),
   logout: () => request<null>("POST", "/auth/logout", {}),
   getDemoPersonas: () =>

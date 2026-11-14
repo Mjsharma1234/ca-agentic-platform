@@ -275,11 +275,12 @@ def simulate_gsp_filing_submission(
     Issues official simulated Application Reference Number (ARN) with timestamp receipt.
     """
     now = datetime.utcnow()
-    # Official ARN pattern: AA + 2 state + 2 month + 2 year + 7 sequential numbers + 1 checksum
+    # Simulated ARN: deliberately prefixed SIM (never the official AA pattern) so a
+    # simulator receipt can never be mistaken for a real GSTN acknowledgement.
     state_code = get_state_code(gstin)
     date_part = now.strftime("%m%y")
     random_part = hashlib.sha256(f"{gstin}{period}{now.isoformat()}".encode()).hexdigest()[:7].upper()
-    arn = f"AA{state_code}{date_part}{random_part}1"
+    arn = f"SIM{state_code}{date_part}{random_part}1"
 
     receipt_hash = hashlib.sha256(f"{arn}|{gstin}|{period}|{dsc_signature}".encode()).hexdigest()
 

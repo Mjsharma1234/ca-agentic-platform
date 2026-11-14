@@ -1,10 +1,20 @@
 /* CA Firm OS — Backend API Bridge
-   Connects the reactive browser state to the production FastAPI backend and database.
-   Handles state persistence, deterministic multi-pass reconciliation, and G1-G18 gate decisions. */
+   Connects the browser state to the FastAPI backend.
+   API base resolution (first match wins):
+     1. window.FIRM_OS_API_BASE (set in a <script> before this file)
+     2. localStorage 'bahi_api_base'  (e.g. https://your-backend.onrender.com/api/v1)
+     3. same origin when served by the backend on :8000
+     4. http://127.0.0.1:8000/api/v1 (local development) */
 
-const API_BASE = (window.location.origin && window.location.origin.includes(':8000')) 
-  ? `${window.location.origin}/api/v1` 
-  : 'http://127.0.0.1:8000/api/v1';
+const API_BASE = (() => {
+  try {
+    if (window.FIRM_OS_API_BASE) return String(window.FIRM_OS_API_BASE).replace(/\/$/, '');
+    const saved = localStorage.getItem('bahi_api_base');
+    if (saved) return saved.replace(/\/$/, '');
+  } catch (e) { /* storage blocked */ }
+  if (window.location.origin && window.location.origin.includes(':8000')) return `${window.location.origin}/api/v1`;
+  return 'http://127.0.0.1:8000/api/v1';
+})();
 
 const API_CLIENT = {
   isOnline: false,
@@ -23,11 +33,19 @@ const API_CLIENT = {
     return headers;
   },
 
+  authConfig: null,   // GET /auth/config: which sign-in the server uses (firebase | otp) + public Firebase web config
+
   async checkHealth() {
     try {
       const resp = await fetch(`${API_BASE}/health`, { method: 'GET' });
       if (resp.ok) {
         this.isOnline = true;
+        if (!this.authConfig) {
+          try {
+            this.authConfig = await (await fetch(`${API_BASE}/auth/config`)).json();
+            if (this.authConfig.firebase_enabled && typeof CURRENT !== 'undefined' && CURRENT.page === 'login' && typeof route === 'function') route();
+          } catch (e) { this.authConfig = null; }
+        }
         this.updateBadge();
         return true;
       }
@@ -38,63 +56,240 @@ const API_CLIENT = {
     return false;
   },
 
-  async loadInitialState() {
-    try {
-      const ok = await this.checkHealth();
-      if (!ok) return;
+  /* ================= Phase 1: per-record storage =================
+     The tracker keeps STATE in memory for rendering, but the firm's records live in the backend:
+     clients, staff, obligations, tasks, notices, timesheets, fee invoices and the daybook each have
+     their own table. After every save() we work out which records changed since the last
+     successful sync and send only those (batched per entity). Other workspace settings go to
+     /ops/settings. Nothing is ever pushed as one whole-state blob. */
+  connected: false,      // signed in with a backend session and the workspace is loaded
+  saveState: 'idle',     // idle | pending | saving | error
+  lastError: '',
+  _snap: null,
+  _ledgerSent: null,
+  _settingsSnap: '',
+  _flushTimer: null,
+  _flushing: false,
 
-      const resp = await fetch(`${API_BASE}/firm-os/state`);
-      if (resp.ok) {
-        const data = await resp.json();
-        if (data.status === 'success' && data.state) {
-          console.log('[API-Bridge] Hydrating state from persistent database...');
-          STATE = data.state;
-          if (typeof applyTheme === 'function') applyTheme();
-          if (typeof renderShell === 'function') renderShell();
-          if (typeof route === 'function') route();
-          this.toast('Connected to Production Backend (Database Synced)', 'agent', 'plug');
-        } else {
-          console.log('[API-Bridge] Database state empty; syncing current seed state to backend...');
-          this.syncState(STATE, true);
-        }
-      }
-    } catch (e) {
-      console.warn('[API-Bridge] Failed to load server state:', e);
+  ENTITIES: {
+    clients: { key: 'id', get: () => ALL_CLIENTS.filter(c => c.id !== 'self').concat(STATE.newClients || []) },
+    staff: { key: 'id', get: () => TEAM },
+    obligations: { key: 'id', get: () => STATE.obligations || [] },
+    tasks: { key: 'id', get: () => STATE.tasks || [] },
+    notices: { key: 'id', get: () => STATE.notices || [] },
+    invoices: { key: 'no', get: () => STATE.invoices || [] },
+    timesheets: { key: 'id', get: () => STATE.timesheets || [] }
+  },
+  // STATE keys that are records (above), per-browser preferences, or derived: never part of settings.
+  NOT_SETTINGS: ['obligations', 'tasks', 'notices', 'invoices', 'timesheets', 'newClients', 'extraTeam', 'ledger',
+    'persona', 'theme', 'session', 'seededFor', 'lastSeen', 'seenGates', 'autopilot', 'ledgerTrimmed'],
+  ARRAY_SETTINGS: ['gates', 'docs', 'threads', 'dscs', 'reveals', 'leaves', 'expenses', 'notes', 'feed', 'firmDeadlines', 'ruleLog'],
+  MAP_SETTINGS: ['walls', 'caps', 'connectors', 'automations', 'agentModes', 'ims', 'patterns', 'bank', 'recon', 'portalDone', 'payments', 'daySignedOff'],
+  STAFF_DEFAULTS: { focus: '', status: 'In office', cost: 0, color: '#4A4E63', signed: 0, ceilingOther: 0, cpe: 0 },
+
+  hasToken() { try { return !!localStorage.getItem('bahi_token'); } catch (e) { return false; } },
+  setToken(t) { this.token = t; try { if (t) localStorage.setItem('bahi_token', t); else localStorage.removeItem('bahi_token'); } catch (e) { } },
+
+  async _get(path) {
+    const resp = await fetch(`${API_BASE}${path}`, { headers: this.getHeaders() });
+    let data = null; try { data = await resp.json(); } catch (e) { }
+    if (!resp.ok) { const err = new Error((data && typeof data.detail === 'string' && data.detail) || `HTTP ${resp.status}`); err.status = resp.status; throw err; }
+    return data;
+  },
+  async _send(method, path, body) {
+    const resp = await fetch(`${API_BASE}${path}`, { method, headers: this.getHeaders(), body: JSON.stringify(body) });
+    let data = null; try { data = await resp.json(); } catch (e) { }
+    if (!resp.ok) { const err = new Error((data && typeof data.detail === 'string' && data.detail) || `HTTP ${resp.status}`); err.status = resp.status; throw err; }
+    return data;
+  },
+
+  _settingsOf(st) {
+    const out = {};
+    Object.keys(st).forEach(k => { if (!this.NOT_SETTINGS.includes(k)) out[k] = st[k]; });
+    return out;
+  },
+  _mapOf(name) {
+    const cfg = this.ENTITIES[name]; const m = new Map();
+    cfg.get().forEach(r => { if (r && r[cfg.key] != null) m.set(String(r[cfg.key]), JSON.stringify(r)); });
+    return m;
+  },
+  _staff(t) { return Object.assign({}, this.STAFF_DEFAULTS, { short: String(t.name || t.id).split(' ')[0] }, t); },
+
+  /* Replace in-memory records with the firm's records from the backend. */
+  hydrate(ws, me) {
+    const keep = { theme: STATE.theme, session: STATE.session };
+    const settings = ws.settings || {};
+    // Settings come only from the server: nothing from this browser's demo state leaks in.
+    this.MAP_SETTINGS.forEach(k => { STATE[k] = {}; });
+    this.ARRAY_SETTINGS.forEach(k => { STATE[k] = []; });
+    Object.assign(STATE, settings, keep);
+    const selfClient = ALL_CLIENTS.find(c => c.id === 'self');
+    ALL_CLIENTS.length = 0; ws.clients.forEach(c => ALL_CLIENTS.push(c)); if (selfClient) ALL_CLIENTS.push(selfClient);
+    STATE.newClients = [];
+    TEAM.length = 0; ws.staff.forEach(t => TEAM.push(this._staff(t)));
+    if (me && !TEAM.find(t => t.id === me.id)) TEAM.push(this._staff(me));
+    STATE.obligations = ws.obligations; STATE.tasks = ws.tasks; STATE.notices = ws.notices;
+    STATE.invoices = ws.invoices; STATE.timesheets = ws.timesheets || [];
+    STATE.ledger = (ws.daybook || []).slice().sort((x, y) => x.n - y.n);
+    STATE.extraTeam = [];
+    this.MAP_SETTINGS.forEach(k => { if (!STATE[k] || typeof STATE[k] !== 'object') STATE[k] = {}; });
+    this.ARRAY_SETTINGS.forEach(k => { if (!Array.isArray(STATE[k])) STATE[k] = []; });
+    if (me) STATE.persona = me.id;
+    // Snapshot = exactly what the server has. Anything added locally after this (e.g. filings whose
+    // due dates rolled into the window today) is then sent on the next flush.
+    this._snap = {}; Object.keys(this.ENTITIES).forEach(n => { this._snap[n] = this._mapOf(n); });
+    this._ledgerSent = new Set(STATE.ledger.map(e => `${e.hash}-${e.n}`));
+    this._settingsSnap = JSON.stringify(this._settingsOf(STATE));
+    if (typeof dayKey === 'function' && typeof topUpObligations === 'function') {
+      const added = topUpObligations(); STATE.seededFor = dayKey(TODAY);
+      if (added) this.syncState();
     }
   },
 
-  syncState(state, immediate = false) {
-    if (!this.isOnline) return;
-    clearTimeout(this.syncTimer);
-    
-    const execute = async () => {
-      this.isSyncing = true;
-      this.updateBadge();
-      try {
-        const resp = await fetch(`${API_BASE}/firm-os/state/sync`, {
-          method: 'POST',
-          headers: this.getHeaders(),
-          body: JSON.stringify({
-            state: state,
-            synced_by: (typeof me === 'function' && me()) ? me().id : 'system'
-          })
-        });
-        if (resp.ok) {
-          this.lastSyncTime = new Date();
-        }
-      } catch (e) {
-        console.warn('[API-Bridge] State sync error:', e);
-      } finally {
-        this.isSyncing = false;
-        this.updateBadge();
-      }
+  /* Starting workspaces for an empty firm. freshState() builds the synthetic demo firm in place, so
+     STATE is put back afterwards. */
+  _fresh() { const prev = STATE; const fresh = freshState(); STATE = prev; return fresh; },
+  _demoPayload() {
+    const fresh = this._fresh();
+    return {
+      clients: CLIENTS.map(c => ({ ...c })), staff: TEAM_SEED.map(t => ({ ...t })), obligations: fresh.obligations,
+      tasks: fresh.tasks, notices: fresh.notices, invoices: fresh.invoices, timesheets: [], daybook: fresh.ledger,
+      settings: this._settingsOf(fresh)
     };
+  },
+  _emptyPayload() {
+    const settings = this._settingsOf(this._fresh());
+    this.ARRAY_SETTINGS.forEach(k => { settings[k] = []; });
+    ['walls', 'ims', 'patterns', 'bank', 'recon', 'portalDone', 'payments', 'daySignedOff'].forEach(k => { settings[k] = {}; });
+    settings.portal = null;
+    return { clients: [], staff: [], obligations: [], tasks: [], notices: [], invoices: [], timesheets: [], daybook: [], settings };
+  },
+  importWorkspace(kind) {
+    return this._send('POST', '/ops/workspace/import', kind === 'demo' ? this._demoPayload() : this._emptyPayload());
+  },
+  _askStartKind() {
+    return new Promise(resolve => {
+      if (typeof openModal !== 'function') { resolve('empty'); return; }
+      openModal({
+        html: `<div class="modal-b"><h2>This firm has no data yet</h2><p class="small dim">Load the demo workspace (a sample firm with clients, filings and notices) to explore, or start empty and add your own clients.</p>
+          <div class="flex" style="justify-content:flex-end;gap:8px;margin-top:16px"><button class="btn" data-k="empty">Start empty</button><button class="btn primary" data-k="demo">Load demo workspace</button></div></div>`,
+        onMount: m => m.querySelectorAll('[data-k]').forEach(b => { b.onclick = () => { closeModal(); resolve(b.dataset.k); }; })
+      });
+    });
+  },
 
-    if (immediate) {
-      execute();
-    } else {
-      this.syncTimer = setTimeout(execute, 400);
+  /* Sign-in finished (token stored): load the firm's workspace and enter the app as that person. */
+  async openWorkspace({ autoDemo = false } = {}) {
+    const me = (await this._get('/ops/me')).staff;
+    let ws = await this._get('/ops/workspace');
+    if (ws.empty && ['MP', 'PT'].includes(me.role)) {
+      const kind = autoDemo ? 'demo' : await this._askStartKind();
+      await this.importWorkspace(kind);
+      ws = await this._get('/ops/workspace');
     }
+    this.hydrate(ws, me);
+    this.connected = true;
+    STATE.session = Object.assign({}, STATE.session || { since: new Date().toISOString(), how: 'backend session' }, { user: me.id });
+    this.saveState = 'idle';
+    this.updateBadge();
+    return me;
+  },
+
+  async loadInitialState() {
+    const ok = await this.checkHealth();
+    if (!ok || !this.hasToken()) return;   // offline, or not signed in yet: the login screen handles it
+    try {
+      await this.openWorkspace();
+      if (typeof applyTheme === 'function') applyTheme();
+      if (typeof renderShell === 'function') renderShell();
+      if (typeof route === 'function') route();
+    } catch (e) {
+      console.warn('[API-Bridge] Could not open workspace:', e);
+      if (e.status === 401 || e.status === 403) this.signOut('Your session has ended. Please sign in again.');
+    }
+  },
+
+  /* Called after every save(): send only what changed, shortly after the last edit. */
+  syncState() {
+    if (!this.connected) return;
+    if (this.saveState !== 'saving') this.saveState = 'pending';
+    this.updateBadge();
+    clearTimeout(this._flushTimer);
+    this._flushTimer = setTimeout(() => this.flush(), 500);
+  },
+
+  async flush() {
+    if (!this.connected || !this._snap) return;
+    if (this._flushing) { clearTimeout(this._flushTimer); this._flushTimer = setTimeout(() => this.flush(), 400); return; }
+    this._flushing = true; this.saveState = 'saving'; this.updateBadge();
+    try {
+      for (const name of Object.keys(this.ENTITIES)) {
+        const prev = this._snap[name]; const now = this._mapOf(name);
+        const upserts = []; const deletes = [];
+        now.forEach((json, k) => { if (prev.get(k) !== json) upserts.push(JSON.parse(json)); });
+        prev.forEach((_, k) => { if (!now.has(k)) deletes.push(k); });
+        if (!upserts.length && !deletes.length) continue;
+        for (let i = 0; i < Math.max(upserts.length, 1); i += 500) {
+          await this._send('POST', `/ops/${name}/batch`, { upserts: upserts.slice(i, i + 500), deletes: i === 0 ? deletes : [] });
+        }
+        this._snap[name] = now;
+      }
+      const fresh = (STATE.ledger || []).filter(e => !this._ledgerSent.has(`${e.hash}-${e.n}`));
+      if (fresh.length) {
+        await this._send('POST', '/ops/daybook', { entries: fresh });
+        fresh.forEach(e => this._ledgerSent.add(`${e.hash}-${e.n}`));
+      }
+      const settingsJson = JSON.stringify(this._settingsOf(STATE));
+      if (settingsJson !== this._settingsSnap) {
+        await this._send('PUT', '/ops/settings', { data: JSON.parse(settingsJson) });
+        this._settingsSnap = settingsJson;
+      }
+      this.saveState = 'idle'; this.lastError = ''; this.lastSyncTime = new Date();
+    } catch (e) {
+      this.lastError = e.message || String(e);
+      if (e.status === 401) { this._flushing = false; this.signOut('Your session has ended. Please sign in again.'); return; }
+      if (e.status >= 400 && e.status < 500) {
+        // The server refused the change (permission or validation): say why, then reload the firm's records.
+        this.toast(`Not saved: ${this.lastError}`, 'bad', 'alert');
+        try {
+          const me = (await this._get('/ops/me')).staff;
+          this.hydrate(await this._get('/ops/workspace'), me);
+          if (typeof renderShell === 'function') renderShell();
+          if (typeof route === 'function') route();
+        } catch (e2) { console.warn('[API-Bridge] reload after refusal failed', e2); }
+        this.saveState = 'idle';
+      } else {
+        this.saveState = 'error';     // network or server error: keep the changes and retry
+        clearTimeout(this._flushTimer); this._flushTimer = setTimeout(() => this.flush(), 5000);
+      }
+    } finally {
+      this._flushing = false; this.updateBadge();
+    }
+  },
+
+  get firebaseMode() { return !!(this.isOnline && this.authConfig && this.authConfig.firebase_enabled); },
+
+  /* Exchange a verified Firebase ID token for the firm session. */
+  async firebaseSignIn(idToken) {
+    const data = await this._send('POST', '/auth/firebase/verify', { id_token: idToken });
+    this.setToken(data.access_token);
+    try { localStorage.setItem('bahi_user', JSON.stringify(data.user)); } catch (e) { }
+    return data;
+  },
+
+  async devLogin(staff) {
+    const data = await this._send('POST', '/ops/dev-login', { staff: { id: staff.id, name: staff.name, role: staff.role } });
+    this.setToken(data.access_token);
+    return data;
+  },
+
+  signOut(message) {
+    this.setToken(null); this.connected = false; this._snap = null;
+    try { localStorage.removeItem('bahi_user'); } catch (e) { }
+    if (typeof STATE !== 'undefined' && STATE) STATE.session = null;
+    this.updateBadge();
+    if (typeof navTo === 'function') navTo('#/login');
+    if (message) this.toast(message, 'warn', 'lock');
   },
 
   async decideGate(gateCode, itemId, action, notes = '') {
@@ -177,7 +372,7 @@ const API_CLIENT = {
 
   async verifyAuditChain() {
     try {
-      const resp = await fetch(`${API_BASE}/firm-os/audit-chain/verify`);
+      const resp = await fetch(`${API_BASE}/firm-os/audit-chain/verify`, { headers: this.getHeaders() });
       if (resp.ok) {
         const data = await resp.json();
         console.log('[API-Bridge] ICAI SQC-1 Cryptographic Audit Report:', data);
@@ -255,7 +450,7 @@ const API_CLIENT = {
 
   async getLiveTracker() {
     try {
-      const resp = await fetch(`${API_BASE}/firm-os/live-tracker`);
+      const resp = await fetch(`${API_BASE}/firm-os/live-tracker`, { headers: this.getHeaders() });
       if (resp.ok) return await resp.json();
     } catch (e) {
       console.warn('[API-Bridge] Failed to fetch live tracker:', e);
@@ -277,7 +472,7 @@ const API_CLIENT = {
 
   async fetchLiveStatutoryCalendar() {
     try {
-      const resp = await fetch(`${API_BASE}/firm-os/statutory-calendar/live`);
+      const resp = await fetch(`${API_BASE}/firm-os/statutory-calendar/live`, { headers: this.getHeaders() });
       if (resp.ok) return await resp.json();
     } catch (e) {
       console.warn('[API-Bridge] Failed to fetch live statutory calendar:', e);
@@ -287,7 +482,7 @@ const API_CLIENT = {
 
   async syncLiveStatutoryCalendar() {
     try {
-      const resp = await fetch(`${API_BASE}/firm-os/statutory-calendar/sync`, { method: 'POST' });
+      const resp = await fetch(`${API_BASE}/firm-os/statutory-calendar/sync`, { method: 'POST', headers: this.getHeaders() });
       if (resp.ok) {
         const data = await resp.json();
         const gstnStatus = data.portals && data.portals.gstn && data.portals.gstn.online ? 'GSTN Online' : 'Active';
@@ -302,14 +497,24 @@ const API_CLIENT = {
   },
 
   /* ---------------- AUTH & OTP ---------------- */
+  async _post(path, body) {
+    const resp = await fetch(`${API_BASE}${path}`, {
+      method: 'POST',
+      headers: this.getHeaders(),
+      body: JSON.stringify(body)
+    });
+    let data = null;
+    try { data = await resp.json(); } catch (e) { data = null; }
+    if (!resp.ok) {
+      const detail = (data && (data.detail || data.message)) || `HTTP ${resp.status}`;
+      return { status: 'error', http_status: resp.status, detail: typeof detail === 'string' ? detail : JSON.stringify(detail) };
+    }
+    return data;
+  },
+
   async requestOTP(identifier, channel = null) {
     try {
-      const resp = await fetch(${API_BASE}/auth/request-otp, {
-        method: 'POST',
-        headers: this.getHeaders(),
-        body: JSON.stringify({ identifier, channel })
-      });
-      return await resp.json();
+      return await this._post('/auth/otp/send', { identifier, channel });
     } catch (e) {
       console.error('[API-Bridge] requestOTP error:', e);
       return { status: 'error', detail: e.message };
@@ -318,13 +523,8 @@ const API_CLIENT = {
 
   async verifyOTP(identifier, otp) {
     try {
-      const resp = await fetch(${API_BASE}/auth/verify-otp, {
-        method: 'POST',
-        headers: this.getHeaders(),
-        body: JSON.stringify({ identifier, otp })
-      });
-      const data = await resp.json();
-      if (resp.ok && data.access_token) {
+      const data = await this._post('/auth/otp/verify', { identifier, otp });
+      if (data && data.access_token) {
         localStorage.setItem('bahi_token', data.access_token);
         localStorage.setItem('bahi_user', JSON.stringify(data.user));
         this.token = data.access_token;
@@ -340,8 +540,8 @@ const API_CLIENT = {
     const token = localStorage.getItem('bahi_token') || this.token;
     if (!token) return null;
     try {
-      const resp = await fetch(${API_BASE}/auth/me, {
-        headers: { 'Authorization': Bearer  }
+      const resp = await fetch(`${API_BASE}/auth/me`, {
+        headers: { 'Authorization': `Bearer ${token}` }
       });
       if (resp.ok) return await resp.json();
     } catch (e) {
@@ -353,12 +553,30 @@ const API_CLIENT = {
   /* ---------------- BANK RECONCILIATION & TALLY ---------------- */
   async runBankReconciliation(payload = {}) {
     try {
-      const resp = await fetch(${API_BASE}/bank-reco/run, {
-        method: 'POST',
-        headers: this.getHeaders(),
-        body: JSON.stringify(payload)
+      const data = await this._post('/bank-reco/reconcile', payload);
+      if (!data || data.status === 'error' || !data.summary) return data || { status: 'error', detail: 'Empty response' };
+      // Normalise the engine's report into the shape the Reconciliation screen renders.
+      const s = data.summary;
+      const pass_counts = {};
+      (data.matched_records || []).forEach(m => {
+        const n = /PASS_(\d)/.exec(m.rule || '');
+        if (n) pass_counts['p' + n[1]] = (pass_counts['p' + n[1]] || 0) + 1;
       });
-      return await resp.json();
+      const brs = data.bank_reconciliation_statement || {};
+      return {
+        status: 'SUCCESS',
+        client_name: s.client_name || 'Sample statement',
+        total_bank_transactions: s.total_bank_transactions,
+        matched_count: s.total_matched,
+        unmatched_bank_count: s.total_unmatched_bank,
+        reconciliation_percentage: s.match_rate_pct,
+        bank_closing_balance: s.bank_closing_balance,
+        net_variance: brs.balance_as_per_books_of_account != null ? Math.round((s.bank_closing_balance - brs.balance_as_per_books_of_account) * 100) / 100 : 0,
+        sqc1_audit_hash: s.reconciliation_audit_hash,
+        pass_counts,
+        tax_audit_alerts: [],
+        raw: data
+      };
     } catch (e) {
       console.error('[API-Bridge] runBankReconciliation error:', e);
       return { status: 'error', detail: e.message };
@@ -367,26 +585,18 @@ const API_CLIENT = {
 
   async parseBankCSV(csv_content, bank_name = 'AUTO') {
     try {
-      const resp = await fetch(${API_BASE}/bank-reco/parse, {
-        method: 'POST',
-        headers: this.getHeaders(),
-        body: JSON.stringify({ csv_content, bank_name })
-      });
-      return await resp.json();
+      return await this._post('/bank-reco/parse', { csv_content, bank_name });
     } catch (e) {
       console.error('[API-Bridge] parseBankCSV error:', e);
       return { status: 'error', detail: e.message };
     }
   },
 
-  async parseTallyXML(xml_content, company_name = 'Surya Enterprises Pvt Ltd') {
+  async parseTallyXML(xml_content, company_name = '') {
     try {
-      const resp = await fetch(${API_BASE}/bank-reco/tally/parse-xml, {
-        method: 'POST',
-        headers: this.getHeaders(),
-        body: JSON.stringify({ xml_content, company_name })
-      });
-      return await resp.json();
+      const data = await this._post('/bank-reco/tally-sync/parse-xml', { xml_content, company_name });
+      if (!data || data.status === 'error' || !data.summary) return data || { status: 'error', detail: 'Empty response' };
+      return { status: 'PARSED_SUCCESSFULLY', is_balanced: data.is_balanced, ...data.summary, raw: data };
     } catch (e) {
       console.error('[API-Bridge] parseTallyXML error:', e);
       return { status: 'error', detail: e.message };
@@ -396,7 +606,7 @@ const API_CLIENT = {
   /* ---------------- BILLING & INVOICING ---------------- */
   async loadInvoices() {
     try {
-      const resp = await fetch(${API_BASE}/billing/invoices);
+      const resp = await fetch(`${API_BASE}/billing/invoices`, { headers: this.getHeaders() });
       if (resp.ok) return await resp.json();
     } catch (e) {
       console.warn('[API-Bridge] loadInvoices error:', e);
@@ -406,12 +616,7 @@ const API_CLIENT = {
 
   async createInvoice(invoiceData) {
     try {
-      const resp = await fetch(${API_BASE}/billing/invoices, {
-        method: 'POST',
-        headers: this.getHeaders(),
-        body: JSON.stringify(invoiceData)
-      });
-      return await resp.json();
+      return await this._post('/billing/invoices', invoiceData);
     } catch (e) {
       console.error('[API-Bridge] createInvoice error:', e);
       return { status: 'error', detail: e.message };
@@ -419,43 +624,34 @@ const API_CLIENT = {
   },
 
   async bulkImportClients(clientsList) {
-    try {
-      const resp = await fetch(${API_BASE}/clients/bulk-import, {
-        method: 'POST',
-        headers: this.getHeaders(),
-        body: JSON.stringify({ clients: clientsList })
-      });
-      return await resp.json();
-    } catch (e) {
-      console.error('[API-Bridge] bulkImportClients error:', e);
-      return { status: 'error', detail: e.message };
-    }
+    // The backend imports clients from an uploaded Excel/CSV file (POST /clients/import-excel);
+    // there is no JSON bulk endpoint yet, so the ops tracker keeps imports local for now.
+    return { status: 'error', detail: 'Bulk import is file-based on the backend; not wired from the ops tracker yet.' };
   },
 
   updateBadge() {
     let badge = document.getElementById('api-status-badge');
-    const topbarRight = document.querySelector('.topbar-right');
-    if (!badge && topbarRight) {
+    const spacer = document.querySelector('#topbar .spacer');
+    if (!badge && spacer) {
       badge = document.createElement('div');
       badge.id = 'api-status-badge';
-      badge.className = 'api-badge';
-      topbarRight.prepend(badge);
+      badge.className = 'api-badge hide-sm';
+      spacer.after(badge);
     }
-    if (badge) {
-      if (this.isOnline) {
-        badge.innerHTML = `
-          <span class="badge-dot ${this.isSyncing ? 'syncing' : 'online'}"></span>
-          <span class="badge-text">${this.isSyncing ? 'Syncing...' : 'DB Online'}</span>
-        `;
-        badge.title = `Connected to FastAPI Backend (SQLite/PostgreSQL) · ${this.lastSyncTime ? 'Last synced ' + this.lastSyncTime.toLocaleTimeString() : 'Active'}`;
-      } else {
-        badge.innerHTML = `
-          <span class="badge-dot offline"></span>
-          <span class="badge-text">Local Cache</span>
-        `;
-        badge.title = 'Backend server offline · Running on local browser cache';
-      }
+    if (!badge) return;
+    let dot = 'offline';
+    let text = 'Offline · this browser only';
+    let title = `Backend not reachable at ${API_BASE}. Changes are saved in this browser only.`;
+    if (this.isOnline && !this.connected) {
+      dot = 'online'; text = 'Backend online · not signed in'; title = 'Sign in to load and save your firm records.';
     }
+    if (this.connected) {
+      dot = this.saveState === 'error' ? 'offline' : (this.saveState === 'idle' ? 'online' : 'syncing');
+      text = { idle: 'All changes saved', pending: 'Saving…', saving: 'Saving…', error: 'Not saved · retrying' }[this.saveState];
+      title = this.saveState === 'error' ? `Last error: ${this.lastError}` : `Saved to ${API_BASE}${this.lastSyncTime ? ' · ' + this.lastSyncTime.toLocaleTimeString() : ''}`;
+    }
+    badge.innerHTML = `<span class="badge-dot ${dot}"></span><span class="badge-text">${text}</span>`;
+    badge.title = title;
   },
 
   toast(msg, tone = 'agent', iconName = 'plug') {
@@ -465,17 +661,25 @@ const API_CLIENT = {
   }
 };
 
-/* Hook into core save() function to automatically stream state to server */
+/* Hook into core save() and renderShell() */
 window.addEventListener('DOMContentLoaded', () => {
-  API_CLIENT.checkHealth();
-  setTimeout(() => API_CLIENT.loadInitialState(), 200);
+  setTimeout(() => API_CLIENT.loadInitialState(), 50);
 
-  // Hook into existing save()
+  // renderShell() rebuilds the topbar, so re-attach the status badge afterwards
+  if (typeof renderShell === 'function') {
+    const originalRenderShell = renderShell;
+    window.renderShell = function() {
+      originalRenderShell();
+      API_CLIENT.updateBadge();
+    };
+  }
+
+  // every save() schedules a record-level sync (no whole-state uploads)
   if (typeof save === 'function') {
     const originalSave = save;
     window.save = function() {
       originalSave();
-      API_CLIENT.syncState(STATE);
+      API_CLIENT.syncState();
     };
   }
 });

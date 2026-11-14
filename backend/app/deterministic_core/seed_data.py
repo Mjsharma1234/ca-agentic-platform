@@ -7,6 +7,7 @@ import json
 from sqlalchemy.orm import Session
 from sqlalchemy import select, delete
 
+from ..models.billing import FirmBillingInvoice
 from ..models.clients import Client, ClientType, ClientStatus, ERPType, RiskTier
 from ..models.invoices import Invoice, InvoiceDirection, InvoiceSource, IMSStatus, InvoiceStatus
 from ..models.gates import GateDecision, GateStatus, GateTier, RequiredRole
@@ -148,6 +149,127 @@ SAMPLE_GSTR2B_FEEDS = [
     # Matches AWS exactly
     {"supplier_gstin": "9917USA29005OS7", "supplier_name": "Amazon Web Services India", "invoice_number": "AWS-IN-2024-9", "invoice_date": "2024-09-25", "taxable_value": 48000.00, "cgst": 0.00, "sgst": 0.00, "igst": 8640.00}
 ]
+
+# Demo firm-billing invoices (the firm's own fee invoices, shown on the Billing screen).
+# Previously a process-global dict inside app/api/v1/billing.py; now seeded into the
+# tenant-scoped firm_billing_invoices table, for the demo tenant only, via the DEBUG-only
+# /api/v1/seed endpoint.
+SAMPLE_FIRM_BILLING_INVOICES = [
+    {
+        "invoice_number": "NC/26-27/00138", "client_id": "c1",
+        "client_name": "Rajesh Textiles Pvt Ltd", "client_gstin": "27AAACR1234F1Z5", "client_pan": "AAACR1234F",
+        "services": [
+            {"description": "GST Monthly Compliance (GSTR-1, GSTR-3B, IMS)", "sac_code": "998215", "quantity": 1, "rate": 8000, "amount": 8000},
+            {"description": "TDS Quarterly Return (26Q/27Q)", "sac_code": "998215", "quantity": 1, "rate": 6000, "amount": 6000},
+        ],
+        "status": "PAID", "issue_date": "2026-10-01", "due_date": "2026-10-15",
+        "period_of_service": "September 2026", "payment_received": 15340.0,
+        "payment_date": "2026-10-10", "payment_reference": "NEFT/HDFC/20261010/882341",
+        "notes": "Payment received via NEFT. TDS Certificate (Form 16A) to be collected.",
+        "template": "standard", "sent_at": "2026-10-02T09:00:00",
+    },
+    {
+        "invoice_number": "NC/26-27/00139", "client_id": "c2",
+        "client_name": "Mumbai Steel Corporation", "client_gstin": "27BBBCM5678G1Z2", "client_pan": "BBBCM5678G",
+        "services": [
+            {"description": "Tax Audit Report (Form 3CD)", "sac_code": "998215", "quantity": 1, "rate": 75000, "amount": 75000},
+            {"description": "Income Tax Return - Company (ITR-6)", "sac_code": "998215", "quantity": 1, "rate": 35000, "amount": 35000},
+        ],
+        "status": "OVERDUE", "issue_date": "2026-09-15", "due_date": "2026-09-30",
+        "period_of_service": "FY 2025-26",
+        "notes": "Follow up with Finance team (Mr. Kapoor). Last reminder sent on 10-Oct-2026.",
+        "template": "detailed", "sent_at": "2026-09-16T10:00:00",
+    },
+    {
+        "invoice_number": "NC/26-27/00140", "client_id": "c3",
+        "client_name": "Global Tech Solutions LLP", "client_gstin": "29CCCGT9012H1Z8", "client_pan": "CCCGT9012H",
+        "services": [
+            {"description": "GST Monthly Compliance (GSTR-1, GSTR-3B, IMS)", "sac_code": "998215", "quantity": 1, "rate": 12000, "amount": 12000},
+            {"description": "ROC Annual Filing (MGT-7, AOC-4)", "sac_code": "998215", "quantity": 1, "rate": 15000, "amount": 15000},
+        ],
+        "status": "SENT", "issue_date": "2026-10-05", "due_date": "2026-10-20",
+        "period_of_service": "October 2026",
+        "notes": "Includes LLP Annual Return for FY 2025-26.",
+        "template": "standard", "sent_at": "2026-10-05T11:30:00",
+    },
+    {
+        "invoice_number": "NC/26-27/00141", "client_id": "c4",
+        "client_name": "Sharma & Sons Logistics", "client_gstin": "07DDDSA3456J1Z1", "client_pan": "DDDSA3456J",
+        "services": [
+            {"description": "Notice Handling & Reply", "sac_code": "998215", "quantity": 1, "rate": 20000, "amount": 20000},
+            {"description": "Income Tax Return - Individual", "sac_code": "998215", "quantity": 2, "rate": 5000, "amount": 10000},
+        ],
+        "status": "DRAFT", "issue_date": "2026-10-28", "due_date": "2026-11-12",
+        "period_of_service": "October 2026",
+        "notes": "Notice received under Sec 143(2). ITR for Mr. Sharma and Mrs. Sharma.",
+        "template": "standard",
+    },
+    {
+        "invoice_number": "NC/26-27/00142", "client_id": "c5",
+        "client_name": "Kerala Spices Export Pvt Ltd", "client_gstin": "32EEEKS7890K1Z4", "client_pan": "EEEKS7890K",
+        "services": [
+            {"description": "GSTR-9C Reconciliation Statement", "sac_code": "998215", "quantity": 1, "rate": 50000, "amount": 50000},
+            {"description": "GST Monthly Compliance (GSTR-1, GSTR-3B, IMS)", "sac_code": "998215", "quantity": 3, "rate": 8000, "amount": 24000},
+        ],
+        "status": "PARTIALLY_PAID", "issue_date": "2026-09-20", "due_date": "2026-10-05",
+        "period_of_service": "FY 2025-26 (Retainer Q3)", "payment_received": 40000.0,
+        "payment_date": "2026-10-01", "payment_reference": "IMPS/ICICI/20261001/441882",
+        "notes": "Advance of ₹40,000 received. Balance ₹43,584 outstanding.",
+        "template": "retainer", "sent_at": "2026-09-21T09:00:00",
+    },
+    {
+        "invoice_number": "NC/26-27/00143", "client_id": "c6",
+        "client_name": "Deccan Precision Auto Ltd", "client_gstin": "36FFFDP4321L1Z9", "client_pan": "FFFDP4321L",
+        "services": [
+            {"description": "Notice Handling & Reply", "sac_code": "998215", "quantity": 1, "rate": 20000, "amount": 20000},
+            {"description": "Tax Audit Report (Form 3CD)", "sac_code": "998215", "quantity": 1, "rate": 120000, "amount": 120000},
+            {"description": "GSTR-9C Reconciliation Statement", "sac_code": "998215", "quantity": 1, "rate": 50000, "amount": 50000},
+        ],
+        "status": "SENT", "issue_date": "2026-10-25", "due_date": "2026-11-10",
+        "period_of_service": "FY 2025-26",
+        "notes": "DRC-01C Rule 88D Notice Handling. High-priority — partner involvement required.",
+        "template": "detailed", "sent_at": "2026-10-25T14:00:00",
+    },
+]
+
+
+def _seed_firm_billing_invoices(session: Session) -> int:
+    """Replaces the demo tenant's firm billing invoices with the sample set above."""
+    from ..api.v1.billing import ServiceLine, compute_totals  # lazy: avoids import cycles at module load
+
+    session.execute(delete(FirmBillingInvoice).where(FirmBillingInvoice.tenant_id == TENANT_ID))
+    for raw in SAMPLE_FIRM_BILLING_INVOICES:
+        services = [ServiceLine(**s) for s in raw["services"]]
+        fin = compute_totals(services)
+        session.add(FirmBillingInvoice(
+            tenant_id=TENANT_ID,
+            invoice_number=raw["invoice_number"],
+            client_id=raw["client_id"],
+            client_name=raw["client_name"],
+            client_gstin=raw["client_gstin"],
+            client_pan=raw["client_pan"],
+            services=[s.model_dump() for s in services],
+            subtotal=Decimal(str(fin["subtotal"])),
+            gst_rate=Decimal(str(fin["gst_rate"])),
+            gst_amount=Decimal(str(fin["gst_amount"])),
+            total_amount=Decimal(str(fin["total_amount"])),
+            tds_194j_rate=Decimal(str(fin["tds_194j_rate"])),
+            tds_194j_amount=Decimal(str(fin["tds_194j_amount"])),
+            net_receivable=Decimal(str(fin["net_receivable"])),
+            status=raw["status"],
+            issue_date=date.fromisoformat(raw["issue_date"]),
+            due_date=date.fromisoformat(raw["due_date"]),
+            period_of_service=raw["period_of_service"],
+            payment_received=Decimal(str(raw.get("payment_received", 0.0))),
+            payment_date=date.fromisoformat(raw["payment_date"]) if raw.get("payment_date") else None,
+            payment_reference=raw.get("payment_reference"),
+            notes=raw.get("notes", ""),
+            created_by="Amit Sharma",
+            template=raw.get("template", "standard"),
+            sent_at=datetime.fromisoformat(raw["sent_at"]) if raw.get("sent_at") else None,
+        ))
+    return len(SAMPLE_FIRM_BILLING_INVOICES)
+
 
 def seed_database(session: Session) -> Dict[str, Any]:
     """Clears and seeds the database with a full, realistic CA firm operating dataset."""
@@ -334,6 +456,9 @@ def seed_database(session: Session) -> Dict[str, Any]:
     ).hexdigest()
     session.add(gst_return)
 
+    # 6. Firm billing invoices (the firm's own fee invoices, demo tenant only)
+    firm_billing_count = _seed_firm_billing_invoices(session)
+
     session.commit()
 
     return {
@@ -342,5 +467,6 @@ def seed_database(session: Session) -> Dict[str, Any]:
         "client_id": str(CLIENT_ID),
         "invoices_count": len(SAMPLE_PURCHASE_BILLS),
         "gates_count": 4,
-        "sample_gstr2b_count": len(SAMPLE_GSTR2B_FEEDS)
+        "sample_gstr2b_count": len(SAMPLE_GSTR2B_FEEDS),
+        "firm_billing_invoices_count": firm_billing_count,
     }

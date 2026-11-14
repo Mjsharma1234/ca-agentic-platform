@@ -80,12 +80,24 @@ class SharedStore:
     def from_settings(cls) -> "SharedStore":
         url = settings.SHARED_STORE_URL
         if not url:
+            if not settings.DEBUG:
+                # Config already refuses to boot without a URL in production; this guards
+                # direct constructions and keeps the posture if that validator ever moves.
+                raise RuntimeError(
+                    "SHARED_STORE_URL (Redis) is required when DEBUG is false: rate limits and "
+                    "replay protection must be shared across workers."
+                )
             return cls()
         try:
             import redis
 
-            return cls(redis.Redis.from_url(url, socket_timeout=0.5, socket_connect_timeout=0.5))
+            client = redis.Redis.from_url(url, socket_timeout=0.5, socket_connect_timeout=0.5)
+            if not settings.DEBUG:
+                client.ping()  # production boots only against a reachable store
+            return cls(client)
         except Exception as exc:  # noqa: BLE001
+            if not settings.DEBUG:
+                raise RuntimeError(f"SHARED_STORE_URL is unreachable in production: {exc}") from exc
             logger.warning("SHARED_STORE_URL unusable (%s); using per-process memory.", exc)
             return cls()
 

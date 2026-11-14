@@ -38,12 +38,22 @@ class GSPClient:
         client_secret: Optional[str] = None,
         simulation_mode: Optional[bool] = None
     ):
+        from ..core.config import settings
+
         self.base_url = base_url or os.getenv("GSP_BASE_URL", "https://asp.adaequare.com/selfservice")
         self.client_id = client_id or os.getenv("GSP_CLIENT_ID", "sim-ca-firm-os-client")
         self.client_secret = client_secret or os.getenv("GSP_CLIENT_SECRET", "sim-secret-key-9921")
-        
-        sim_env = os.getenv("GSP_SIMULATION_MODE", "true").lower() in ("true", "1", "yes")
-        self.simulation_mode = simulation_mode if simulation_mode is not None else sim_env
+
+        # Simulation is opt-in outside DEBUG: config refuses to boot in production unless
+        # GSP_SIMULATION_MODE is set explicitly, so a forgotten env var can never make real
+        # returns get "filed" against the simulator.
+        if simulation_mode is not None:
+            self.simulation_mode = simulation_mode
+        elif settings.GSP_SIMULATION_MODE is not None:
+            self.simulation_mode = settings.GSP_SIMULATION_MODE
+        else:
+            env = os.getenv("GSP_SIMULATION_MODE")
+            self.simulation_mode = env.lower() in ("true", "1", "yes") if env is not None else settings.DEBUG
 
         self.auth_token: Optional[str] = None
         self.token_expiry: float = 0
@@ -148,7 +158,7 @@ class GSPClient:
         if self.simulation_mode:
             self._record_success()
             state_code = gstin[:2] if len(gstin) >= 2 else "27"
-            dummy_arn = f"AA{state_code}1026{hashlib.sha256(f'{gstin}{period}'.encode()).hexdigest()[:7].upper()}1"
+            dummy_arn = f"SIM{state_code}1026{hashlib.sha256(f'{gstin}{period}'.encode()).hexdigest()[:7].upper()}1"
             return GSPResponse(
                 success=True,
                 data={
@@ -158,7 +168,8 @@ class GSPClient:
                     "status": "FILED",
                     "arn": dummy_arn,
                     "filed_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-                    "mode": "ONLINE_DSC"
+                    "mode": "ONLINE_DSC",
+                    "simulated": True
                 }
             )
         return GSPResponse(success=False, data={}, error_code="NOT_FOUND", error_message="Filing status query failed.")
@@ -169,7 +180,7 @@ class GSPClient:
         if self.simulation_mode:
             self._record_success()
             state_code = gstin[:2] if len(gstin) >= 2 else "27"
-            arn = f"AA{state_code}1026{hashlib.sha256(f'{gstin}{period}{time.time()}'.encode()).hexdigest()[:7].upper()}1"
+            arn = f"SIM{state_code}1026{hashlib.sha256(f'{gstin}{period}{time.time()}'.encode()).hexdigest()[:7].upper()}1"
             return GSPResponse(
                 success=True,
                 data={
@@ -180,7 +191,8 @@ class GSPClient:
                     "return_type": "GSTR-1",
                     "filed_at": datetime.utcnow().isoformat(),
                     "dsc_verified": True,
-                    "transaction_id": uuid.uuid4().hex
+                    "transaction_id": uuid.uuid4().hex,
+                    "simulated": True
                 }
             )
         return GSPResponse(success=False, data={}, error_code="SUBMIT_ERROR", error_message="Real GSP submission requires production certificates.")
@@ -191,7 +203,7 @@ class GSPClient:
         if self.simulation_mode:
             self._record_success()
             state_code = gstin[:2] if len(gstin) >= 2 else "27"
-            arn = f"AA{state_code}1026{hashlib.sha256(f'{gstin}{period}{time.time()}-3B'.encode()).hexdigest()[:7].upper()}1"
+            arn = f"SIM{state_code}1026{hashlib.sha256(f'{gstin}{period}{time.time()}-3B'.encode()).hexdigest()[:7].upper()}1"
             return GSPResponse(
                 success=True,
                 data={

@@ -23,14 +23,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
+# Run as a non-root user
+RUN useradd --create-home --uid 10001 app
+
 # Copy python dependencies from builder
-COPY --from=builder /root/.local /root/.local
-ENV PATH=/root/.local/bin:$PATH
+COPY --from=builder /root/.local /home/app/.local
+ENV PATH=/home/app/.local/bin:$PATH
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 
-# Copy application source
-COPY . .
+# Copy application source (.dockerignore keeps .env*, *.db and tests out)
+COPY --chown=app:app . .
+USER app
 
 # Cloud Run uses 8080 by default and injects $PORT
 EXPOSE 8080

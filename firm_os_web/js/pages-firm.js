@@ -113,7 +113,7 @@ function openAddEmployee() {
         btn.innerHTML = 'Generating Credentials...';
 
         try {
-          if (typeof API_CLIENT !== 'undefined' && API_CLIENT.createEmployee) {
+          if (typeof API_CLIENT !== 'undefined' && API_CLIENT.isOnline && API_CLIENT.createEmployee) {
             const res = await API_CLIENT.createEmployee({
               full_name: name,
               email: email,
@@ -124,22 +124,18 @@ function openAddEmployee() {
               stipend_or_cost: cost
             });
 
-            const empId = res.username || res.employee_id.toLowerCase();
-            TEAM.push({
-              id: empId,
-              name: name,
-              short: name.split(' ')[0],
-              role: role,
-              focus: focus,
-              mno: mno,
-              status: 'In office · Active',
-              cost: cost
-            });
+            if (!res || res.status === 'error' || !(res.username || res.employee_id)) throw new Error((res && res.detail) || 'Backend did not create the employee');
+            const empId = res.username || String(res.employee_id).toLowerCase();
+            // The server already saved this person (login account + staff record): use its record as-is.
+            addTeamMember(Object.assign({ short: name.split(' ')[0], color: '#4A4E63', signed: 0, ceilingOther: 0, cpe: 0 }, res.staff || {
+              id: empId, name, role, focus, mno, status: 'In office · Active', cost, email
+            }));
+            if (API_CLIENT._snap) API_CLIENT._snap.staff.set(empId, JSON.stringify(TEAM.find(t => t.id === empId)));
 
             closeSheet();
             openSheet({
-              title: 'Employee ID Provisioned',
-              sub: 'Share these initial credentials securely with the team member.',
+              title: 'Team member added',
+              sub: 'They sign in with a one-time code sent to the email or phone below. No password is issued.',
               wide: false,
               body: `
                 <div class="card pad">
@@ -149,7 +145,7 @@ function openAddEmployee() {
                   <div class="grid g2" style="gap:10px;font-size:13px">
                     <div><b>Username:</b> <span class="mono">${res.username}</span></div>
                     <div><b>Role:</b> <span class="chip outline">${ROLES[role].short}</span></div>
-                    <div><b>Temp Password:</b> <span class="mono" style="color:var(--ok)">${res.temporary_password}</span></div>
+                    <div><b>Sign-in:</b> <span>${esc(email)}${phone ? ' · ' + esc(phone) : ''}</span></div>
                     <div><b>ICAI / Reg:</b> <span>${res.membership_or_reg_no}</span></div>
                   </div>
                 </div>
@@ -162,7 +158,7 @@ function openAddEmployee() {
           } else {
             const rand = Math.floor(1000 + Math.random() * 9000);
             const empId = 'emp_' + rand;
-            TEAM.push({
+            addTeamMember({
               id: empId,
               name: name,
               short: name.split(' ')[0],
@@ -297,7 +293,7 @@ VIEWS.billing = {
             
             const newInv = { no: invNo, client: cid, amt: total, status: 'Draft — G9', date: new Date().toISOString(), age: 0, desc };
             STATE.invoices.unshift(newInv);
-            if (typeof API_CLIENT !== 'undefined' && API_CLIENT.createInvoice) {
+            if (typeof API_CLIENT !== 'undefined' && API_CLIENT.isOnline && API_CLIENT.createInvoice) {
               API_CLIENT.createInvoice({
                 invoice_number: invNo,
                 client_id: cid,
@@ -343,25 +339,18 @@ Telangana Heavy Fab Ltd · 36AABCT4411K1Z9 · Corporate · Retainer: ₹3,60,000
           m.querySelector('[data-x]').onclick = () => closeModal();
           m.querySelector('#bulk-submit').onclick = async () => {
             const sampleClients = [
-              { id: 'c_kaveri', name: 'Kaveri Agro Seeds Ltd', short: 'Kaveri Seeds', pan: 'AAACK1298P', gstin: '36AAACK1298P1Z4', type: 'Private Limited', fee: 240000, tags: ['gst', 'audit', 'tax'], books: 'Tally Prime' },
-              { id: 'c_krishna', name: 'Sri Krishna Pharma LLP', short: 'Krishna Pharma', pan: 'AAAFS8821M', gstin: '36AAAFS8821M1ZX', type: 'LLP', fee: 180000, tags: ['gst', 'tds', 'books'], books: 'Zoho Books' },
-              { id: 'c_telangana', name: 'Telangana Heavy Fab Ltd', short: 'Telangana Fab', pan: 'AABCT4411K', gstin: '36AABCT4411K1Z9', type: 'Public Limited', fee: 360000, tags: ['gst', 'audit', 'books'], books: 'SAP Business One' }
+              { id: 'c_kaveri', name: 'Kaveri Agro Seeds Ltd', short: 'Kaveri Seeds', pan: 'AAACK1298P', gstin: '36AAACK1298P1Z4', type: 'Private company', city: 'Hyderabad', fee: 240000, turnover: 90000000, tags: ['co', 'gstm', 'tds', 'saudit', 'taudit', 'books'], books: 'Tally Prime (desktop)' },
+              { id: 'c_krishna', name: 'Sri Krishna Pharma LLP', short: 'Krishna Pharma', pan: 'AAAFS8821M', gstin: '36AAAFS8821M1ZX', type: 'LLP', city: 'Hyderabad', fee: 180000, turnover: 60000000, tags: ['llp', 'gstm', 'tds', 'taudit', 'books'], books: 'Zoho Books' },
+              { id: 'c_telangana', name: 'Telangana Heavy Fab Ltd', short: 'Telangana Fab', pan: 'AABCT4411K', gstin: '36AABCT4411K1Z9', type: 'Public company', city: 'Hyderabad', fee: 360000, turnover: 250000000, tags: ['co', 'gstm', 'einv', 'tds', 'saudit', 'taudit', 'books'], books: 'SAP Business One' }
             ];
-            
+            let added = 0, filings = 0, dup = 0;
             sampleClients.forEach(sc => {
-              if (!ALL_CLIENTS.find(x => x.id === sc.id)) {
-                ALL_CLIENTS.push(sc);
-                STATE.newClients.push(sc);
-                STATE.walls[sc.id] = ['srinivas', 'amit', 'ananya'];
-              }
+              const res = enrolClient(sc, { wall: ['amit', 'ananya'] });
+              if (res.duplicate) dup++; else { added++; filings += res.added; }
             });
-
-            if (typeof API_CLIENT !== 'undefined' && API_CLIENT.bulkImportClients) {
-              API_CLIENT.bulkImportClients(sampleClients);
-            }
             save();
             closeModal();
-            toast('3 New Enterprise Clients imported and enrolled into Statutory Calendar', 'ok', 'check');
+            toast(added ? `${added} clients imported · ${filings} filings scheduled${dup ? ` · ${dup} already existed` : ''}` : 'These clients are already in the workspace', added ? 'ok' : 'warn', 'check');
             rerender();
           };
         }
@@ -471,10 +460,11 @@ VIEWS.agents = {
 VIEWS.connectors = {
   render() {
     const cats = [...new Set(CONNECTORS.map(c => c.cat))];
-    const stChip = c => !STATE.connectors[c.id] ? '<span class="chip outline">Paused</span>' : /design/.test(c.status) ? `<span class="chip code">${icon('lock')}${esc(c.status)}</span>` : c.status === 'Degraded' ? '<span class="chip warn">Degraded</span>' : '<span class="chip ok">Healthy</span>';
+    const stChip = c => /design/.test(c.status) ? `<span class="chip code">${icon('lock')}${esc(c.status)}</span>` : c.status === 'Not built' ? '<span class="chip outline">Not built</span>' : c.status === 'Simulated' ? '<span class="chip warn">Simulated</span>' : !STATE.connectors[c.id] ? '<span class="chip outline">Paused</span>' : c.status === 'Live' ? '<span class="chip ok">Live</span>' : `<span class="chip agent">${esc(c.status)}</span>`;
     return pageHead('Connectors · what can actually be integrated with in India', 'Plumbing, <em>honestly labelled</em>', 'GST and income tax by interface. Withholding by validated file. The registrar, provident fund, state insurance, DGFT and RBI portals have no interface — scripting them is brittle, against their terms and can leave a half-submitted statutory filing. CA Firm OS builds the pack; a person files it.') + `
-    <div class="callout warn mb16">${icon('clock')}<div><b>Peak-day behaviour:</b> on the 11th and 20th every taxpayer in India hits the same portals. CA Firm OS queues submissions with backoff, never retries a signed payload blindly, and FL-1 alerts a partner if an acknowledgement is silent for an hour.</div></div>
-    ${cats.map(cat => `<div class="upper muted mb8 mt16">${cat}</div><div class="grid g3">${CONNECTORS.filter(c => c.cat === cat).map(c => `<div class="card pad"><div class="flex"><span class="glyph code" style="width:40px;font-size:8.5px">${c.mode === 'api' ? 'API' : c.mode === 'file' ? 'FILE' : 'PACK'}</span><div style="flex:1;min-width:0"><b>${esc(c.name)}</b><div class="tiny muted">${esc(c.scope)}</div></div>${/design/.test(c.status) ? '' : `<label class="switch"><input type="checkbox" data-cx="${c.id}" ${STATE.connectors[c.id] ? 'checked' : ''}><span></span></label>`}</div><div class="flex wrap mt12" style="gap:8px">${stChip(c)}${c.sync !== '—' ? `<span class="chip outline">${icon('refresh')}${esc(c.sync)}</span>` : ''}${c.quota !== '—' ? `<span class="chip outline">quota ${esc(c.quota)}</span>` : ''}</div></div>`).join('')}</div>`).join('')}
+    <div class="callout mb16">${icon('info')}<div><b>Build status, not marketing:</b> ${CONNECTORS.filter(c => c.status === 'Live').length} live · ${CONNECTORS.filter(c => ['Partial', 'File import'].includes(c.status)).length} partial or file-import · ${CONNECTORS.filter(c => c.status === 'Simulated').length} simulated · ${CONNECTORS.filter(c => c.status === 'Not built').length} not built yet. Only connectors that do something real can be paused or resumed.</div></div>
+    <div class="callout warn mb16">${icon('clock')}<div><b>Peak-day behaviour (design):</b> on the 11th and 20th every taxpayer in India hits the same portals. CA Firm OS queues submissions with backoff, never retries a signed payload blindly, and FL-1 alerts a partner if an acknowledgement is silent for an hour.</div></div>
+    ${cats.map(cat => `<div class="upper muted mb8 mt16">${cat}</div><div class="grid g3">${CONNECTORS.filter(c => c.cat === cat).map(c => `<div class="card pad"><div class="flex"><span class="glyph code" style="width:40px;font-size:8.5px">${c.mode === 'api' ? 'API' : c.mode === 'file' ? 'FILE' : 'PACK'}</span><div style="flex:1;min-width:0"><b>${esc(c.name)}</b><div class="tiny muted">${esc(c.scope)}</div></div>${(/design/.test(c.status) || c.status === 'Not built' || c.status === 'Simulated') ? '' : `<label class="switch"><input type="checkbox" data-cx="${c.id}" ${STATE.connectors[c.id] ? 'checked' : ''}><span></span></label>`}</div><div class="flex wrap mt12" style="gap:8px">${stChip(c)}${c.sync !== '—' ? `<span class="chip outline">${icon('refresh')}${esc(c.sync)}</span>` : ''}${c.quota !== '—' ? `<span class="chip outline">quota ${esc(c.quota)}</span>` : ''}</div></div>`).join('')}</div>`).join('')}
     <div class="card pad mt16"><b>Adding a filing application</b><p class="small dim">Any package that exposes an API, an export or a file drop can be connected: a connector declares what it reads, what it writes (never "submit"), its rate budget and its secret reference. Credentials live in the secret store — never in a prompt, never visible to any automation.</p><button class="btn sm" id="newcx">${icon('plus')} Request a connector</button></div>`;
   },
   mount(el) {

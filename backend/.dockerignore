@@ -1,0 +1,20 @@
+# Never bake secrets or local state into images (Dockerfile does COPY . .)
+.env
+.env.*
+*.db
+*.sqlite3
+*.db-journal
+
+# Test/build residue
+.pytest_cache/
+__pycache__/
+*.py[cod]
+tests/
+htmlcov/
+.coverage
+
+# VCS / editor
+.git/
+.gitignore
+.vscode/
+.idea/

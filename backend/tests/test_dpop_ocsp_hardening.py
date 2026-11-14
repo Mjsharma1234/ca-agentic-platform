@@ -407,6 +407,9 @@ def prod(**over):
     base = dict(
         DEBUG=False, SECRET_KEY="k" * 40, OTP_SANDBOX_MODE=False, PUBLIC_WEB_URL="https://app.example.com",
         PUBLIC_API_URL="https://api.example.com", DSC_TRUSTED_CA_PEM=ca_pem(), DSC_REVOCATION_MODE="strict",
+        FIREBASE_PROJECT_ID="ca-test-project",
+        GSP_SIMULATION_MODE=False, SHARED_STORE_URL="redis://localhost:6379/9",
+        CORS_ORIGINS=["https://app.example.com"],
     )
     base.update(over)
     return Settings(_env_file=None, **base)

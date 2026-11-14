@@ -1,8 +1,13 @@
+import logging
+import os
+
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import List, Optional
 
 INSECURE_DEFAULT_SECRET = "your-super-secret-key-change-in-production"
+
+_logger = logging.getLogger("config")
 
 class Settings(BaseSettings):
     DATABASE_URL: str = "sqlite+aiosqlite:///./ca_platform.db"
@@ -24,7 +29,7 @@ class Settings(BaseSettings):
     # Schema is owned by Alembic outside local development. When None, tables are only
     # auto-created in DEBUG mode (SQLite dev loop); production must run `alembic upgrade head`.
     AUTO_CREATE_TABLES: Optional[bool] = None
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 480
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
     SIGNING_REQUEST_TTL_SECONDS: int = 300
     # DSC trust & revocation (see app/deterministic_core/dsc_revocation.py)
     DSC_TRUSTED_CA_PEM_PATH: Optional[str] = None
@@ -46,9 +51,16 @@ class Settings(BaseSettings):
     # Unset (or unreachable) => per-process in-memory fallback.
     SHARED_STORE_URL: Optional[str] = None
     APP_NAME: str = "CA Agentic Compliance Platform"
-    DEBUG: bool = True
+    # Insecure behaviour is opt-in: production posture is the default. Local development
+    # must set DEBUG=true explicitly (.env, start scripts, conftest).
+    DEBUG: bool = False
     CORS_ORIGINS: List[str] = ["*"]
-    
+
+    # GST Suvidha Provider simulation. Unset => simulated in DEBUG only; production (DEBUG=false)
+    # refuses to boot until it is set explicitly, so real returns can never be "filed" against the
+    # simulator by accident.
+    GSP_SIMULATION_MODE: Optional[bool] = None
+
     GSP_PRIMARY_URL: Optional[str] = None
     GSP_SECONDARY_URL: Optional[str] = None
     WABA_API_URL: Optional[str] = None
@@ -65,6 +77,19 @@ class Settings(BaseSettings):
     SMTP_USER: Optional[str] = None
     SMTP_PASSWORD: Optional[str] = None
     SMTP_FROM_EMAIL: str = "noreply@ca-platform.local"
+    # Login. "firebase": every login is a Firebase phone-OTP sign-in whose ID token the API verifies; the built-in
+    # OTP endpoints are disabled. "otp": the built-in OTP service (local development / demo). When unset it is
+    # "firebase" if FIREBASE_PROJECT_ID is set, else "otp". Production (DEBUG=false) requires "firebase".
+    LOGIN_PROVIDER: Optional[str] = None
+    FIREBASE_PROJECT_ID: Optional[str] = None
+    FIREBASE_MAX_AUTH_AGE_SECONDS: int = 300   # a Firebase sign-in older than this cannot start a session
+    # Public Firebase web-app identifiers (Project settings > Your apps > Web app). Not secrets: they are served to the
+    # browser by GET /auth/config so the static web app needs no build step.
+    FIREBASE_WEB_API_KEY: Optional[str] = None
+    FIREBASE_AUTH_DOMAIN: Optional[str] = None   # defaults to <project id>.firebaseapp.com
+    FIREBASE_APP_ID: Optional[str] = None
+    # E.164 number allowed to create the very first Partner account while no user exists (initial set-up only).
+    BOOTSTRAP_ADMIN_PHONE: Optional[str] = None
     OTP_EXPIRE_MINUTES: int = 5
     OTP_SANDBOX_MODE: bool = True
     
@@ -74,16 +99,29 @@ class Settings(BaseSettings):
     def _fail_closed_in_production(self):
         if self.DSC_REVOCATION_MODE not in ("off", "soft", "strict"):
             raise ValueError("DSC_REVOCATION_MODE must be off, soft or strict.")
+        if self.LOGIN_PROVIDER not in (None, "otp", "firebase"):
+            raise ValueError("LOGIN_PROVIDER must be otp or firebase.")
+        if self.effective_login_provider == "firebase" and not self.FIREBASE_PROJECT_ID:
+            raise ValueError("FIREBASE_PROJECT_ID is required when LOGIN_PROVIDER is firebase.")
         if not self.DEBUG:
             if self.SECRET_KEY == INSECURE_DEFAULT_SECRET or len(self.SECRET_KEY) < 32:
                 raise ValueError(
                     "SECRET_KEY must be set to a random value of at least 32 characters when DEBUG is false."
+                )
+            if self.SECRET_KEY == "enterprise-jwt-secret-key-change-in-production-2026":
+                raise ValueError(
+                    "SECRET_KEY is the placeholder that was committed to the repository; generate a random one."
                 )
             if self.OTP_SANDBOX_MODE:
                 raise ValueError(
                     "OTP_SANDBOX_MODE must be false when DEBUG is false: sandbox mode returns OTPs in API responses."
                 )
             self._require_dsc_trust_anchor()
+            if self.effective_login_provider != "firebase":
+                raise ValueError(
+                    "Every login must go through Firebase phone OTP when DEBUG is false: set FIREBASE_PROJECT_ID "
+                    "(and LOGIN_PROVIDER=firebase)."
+                )
             if self.DATABASE_URL.startswith(("postgres://", "postgresql")) and not self.DB_APP_ROLE:
                 raise ValueError(
                     "DB_APP_ROLE must be set (to `ca_app`) when DEBUG is false on PostgreSQL: without it the API "
@@ -98,6 +136,30 @@ class Settings(BaseSettings):
                     "PUBLIC_API_URL must be the public https:// URL of this API when DEBUG is false "
                     "(signer DPoP proofs are bound to it). Set SIGNER_REQUIRE_DPOP=false only to disable DPoP."
                 )
+            if os.getenv("ALLOW_TEST_AUTH_HEADERS", "").lower() in ("true", "1"):
+                raise ValueError(
+                    "ALLOW_TEST_AUTH_HEADERS must not be set when DEBUG is false: it lets any request "
+                    "impersonate any user via X-User-Id headers."
+                )
+            if self.GSP_SIMULATION_MODE is None:
+                raise ValueError(
+                    "GSP_SIMULATION_MODE must be set explicitly (true/false) when DEBUG is false: left unset, "
+                    "real GST returns would silently be 'filed' against the built-in simulator."
+                )
+            if self.GSP_SIMULATION_MODE:
+                _logger.warning(
+                    "GSP_SIMULATION_MODE=true with DEBUG=false: GST filings will receive SIMULATED ARNs. "
+                    "Only acceptable for demo deployments."
+                )
+            if not self.SHARED_STORE_URL:
+                raise ValueError(
+                    "SHARED_STORE_URL (Redis) is required when DEBUG is false: without it, rate limits and "
+                    "DPoP/Firebase replay protection are per-process and multiply by the number of workers."
+                )
+            if "*" in self.CORS_ORIGINS:
+                raise ValueError(
+                    "CORS_ORIGINS must list explicit origins when DEBUG is false (no '*')."
+                )
         return self
 
     def _require_dsc_trust_anchor(self) -> None:
@@ -108,6 +170,10 @@ class Settings(BaseSettings):
             read_trust_anchor(self.DSC_TRUSTED_CA_PEM_PATH, self.DSC_TRUSTED_CA_PEM)
         except TrustAnchorError as exc:
             raise ValueError(f"DSC trust anchor is required when DEBUG is false: {exc}") from exc
+
+    @property
+    def effective_login_provider(self) -> str:
+        return self.LOGIN_PROVIDER or ("firebase" if self.FIREBASE_PROJECT_ID else "otp")
 
     @property
     def auto_create_tables(self) -> bool:

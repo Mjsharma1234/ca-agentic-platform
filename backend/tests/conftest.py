@@ -1,3 +1,9 @@
+import os
+
+# Tests run against the development posture. Production hardening (DEBUG=false) is itself
+# exercised by tests that construct Settings(DEBUG=False, ...) explicitly.
+os.environ.setdefault("DEBUG", "true")
+
 import pytest
 
 @pytest.fixture

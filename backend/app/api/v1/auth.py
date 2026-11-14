@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any, List
 from pydantic import BaseModel, Field
 from fastapi import APIRouter, Depends, HTTPException, status, Request
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy import select, or_
 
@@ -90,11 +91,34 @@ DEMO_PERSONAS = [
 # -------------------------------------------------------------
 # Endpoints
 # -------------------------------------------------------------
+def _require_builtin_otp() -> None:
+    """With LOGIN_PROVIDER=firebase every login is a Firebase phone-OTP sign-in; the built-in OTP path is closed."""
+    if settings.effective_login_provider == "firebase":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found.")
+
+
+@router.get("/config")
+def auth_config():
+    """What the login screen needs to know before it renders. Public and contains no secrets."""
+    provider = settings.effective_login_provider
+    out = {"login_provider": provider, "firebase_enabled": provider == "firebase"}
+    if provider == "firebase":
+        out["firebase"] = {
+            "apiKey": settings.FIREBASE_WEB_API_KEY,
+            "authDomain": settings.FIREBASE_AUTH_DOMAIN or f"{settings.FIREBASE_PROJECT_ID}.firebaseapp.com",
+            "projectId": settings.FIREBASE_PROJECT_ID,
+            "appId": settings.FIREBASE_APP_ID,
+        }
+        out["firebase_web_ready"] = bool(settings.FIREBASE_WEB_API_KEY and settings.FIREBASE_APP_ID)
+    return out
+
+
 @router.post("/otp/send")
 def send_otp(req: SendOTPRequest, db: Session = Depends(get_system_db)):
     """Request a 6-digit OTP via Fast2SMS / Twilio (SMS) or Resend / SMTP (Email).
     In sandbox mode, the OTP is returned in the response and printed to the server logs.
     """
+    _require_builtin_otp()
     try:
         result = OTPService.generate_and_send_otp(
             db=db,
@@ -114,6 +138,7 @@ def verify_otp(req: VerifyOTPRequest, request: Request, db: Session = Depends(ge
     """Verifies the 6-digit OTP, loads or provisions the user profile, appends an
     ICAI SQC 1 cryptographic audit block, and issues a signed JWT session token.
     """
+    _require_builtin_otp()
     try:
         norm_id, channel = OTPService.normalize_identifier(req.identifier)
     except ValueError as e:
@@ -132,6 +157,8 @@ def verify_otp(req: VerifyOTPRequest, request: Request, db: Session = Depends(ge
         )
     )
     user = db.execute(query).scalars().first()
+    if user is not None and not user.is_active:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This account is deactivated.")
 
     # If user doesn't exist, check default persona list or create default firm user
     if not user:
@@ -229,93 +256,92 @@ def verify_otp(req: VerifyOTPRequest, request: Request, db: Session = Depends(ge
         )
     )
 
+def _bootstrap_user(db: Session, identifier: str):
+    """First-ever login only: BOOTSTRAP_ADMIN_PHONE becomes the firm's first Partner. In local development a demo
+    persona's number is provisioned as that persona. Anything else is refused by the caller."""
+    persona = next((p for p in DEMO_PERSONAS if p["phone"] == identifier), None) if settings.DEBUG else None
+    first_login = db.execute(select(User.id).limit(1)).first() is None
+    bootstrap = first_login and bool(settings.BOOTSTRAP_ADMIN_PHONE) and identifier == settings.BOOTSTRAP_ADMIN_PHONE
+    if persona is None and not bootstrap:
+        return None
+
+    firm = db.execute(select(Firm).limit(1)).scalars().first()
+    if firm is None:
+        firm = Firm(
+            id=uuid.uuid4(), firm_code=f"firm-{uuid.uuid4().hex[:8]}", firm_name="My CA Firm",
+            constitution="PARTNERSHIP",
+        )
+        db.add(firm)
+        db.flush()
+    digits = identifier.lstrip("+")
+    user = User(
+        firm_id=firm.id,
+        email=persona["email"] if persona else f"partner.{digits}@pending.invalid",
+        phone=identifier,
+        full_name=persona["full_name"] if persona else "Firm Partner",
+        role=persona["role"] if persona else UserRole.PARTNER.value,
+        membership_no=persona["membership_no"] if persona else None,
+        hashed_password=get_password_hash(uuid.uuid4().hex),
+        is_active=True,
+        mfa_enabled=True,
+    )
+    db.add(user)
+    try:
+        db.commit()
+    except IntegrityError:
+        # A second request for the same first login got here at the same moment and won the race:
+        # use the account it created instead of failing.
+        db.rollback()
+        existing = db.execute(select(User).where(User.phone == identifier)).scalars().first()
+        if existing is None:
+            raise
+        return existing
+    db.refresh(user)
+    return user
+
+
 @router.post("/firebase/verify", response_model=AuthResponse)
 def verify_firebase_auth(req: FirebaseVerifyRequest, request: Request, db: Session = Depends(get_system_db)):
-    """Verifies Firebase Auth ID Token, resolves CA user profile, logs SQC-1 AuditBlock,
-    and returns platform RBAC JWT session token.
+    """Exchanges a verified Firebase phone-OTP ID token for the platform's RBAC session token.
+
+    The token is verified cryptographically (signature, audience, issuer, freshness, one-time use); the phone
+    number must already belong to an active user of a firm. Accounts are never created for unknown numbers
+    (except the one-off first-Partner bootstrap and local-development demo personas).
     """
-    token_str = req.id_token.strip()
-    phone_number = None
-    email = None
-    firebase_uid = None
+    from ...core.firebase_auth import FirebaseAuthError, verify_firebase_phone_token
+    from ...core.shared_store import get_store
 
+    if settings.effective_login_provider != "firebase" or not settings.FIREBASE_PROJECT_ID:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Firebase sign-in is not configured.")
+    client_ip = request.client.host if request.client else "unknown"
+    if not get_store().allow(f"firebase-verify:{client_ip}", 20, 60):
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Too many attempts. Try again shortly.", headers={"Retry-After": "60"})
     try:
-        import firebase_admin
-        from firebase_admin import auth as fb_auth
-        if not firebase_admin._apps:
-            firebase_admin.initialize_app()
-        decoded = fb_auth.verify_id_token(token_str)
-        phone_number = decoded.get("phone_number")
-        email = decoded.get("email")
-        firebase_uid = decoded.get("uid")
-    except Exception as e:
-        logger.warning(f"firebase_admin SDK verification fallback: {e}")
-        try:
-            import jwt
-            unverified = jwt.decode(token_str, options={"verify_signature": False})
-            phone_number = unverified.get("phone_number")
-            email = unverified.get("email")
-            firebase_uid = unverified.get("user_id") or unverified.get("sub")
-        except Exception as e2:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Firebase Token.")
-
-    identifier = phone_number or email
-    if not identifier:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Firebase token contains no verified phone or email.")
-
-    # Find existing user
-    user = db.execute(
-        select(User).where(or_(User.phone == identifier, User.email == identifier))
-    ).scalars().first()
-
-    if not user:
-        # Match demo persona
-        matched_persona = next(
-            (p for p in DEMO_PERSONAS if p["phone"] == identifier or p["email"] == identifier),
-            None
+        claims = verify_firebase_phone_token(
+            req.id_token.strip(), project_id=settings.FIREBASE_PROJECT_ID,
+            max_auth_age_seconds=settings.FIREBASE_MAX_AUTH_AGE_SECONDS,
         )
+    except FirebaseAuthError as exc:
+        logger.warning("Firebase token refused: %s", exc)
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Phone verification failed. Please try again.")
+    identifier = claims["phone_number"]
+    firebase_uid = claims["sub"]
 
-        firm = db.execute(select(Firm).limit(1)).scalars().first()
-        if not firm:
-            firm = Firm(
-                id=uuid.UUID("00000000-0000-0000-0000-000000000001"),
-                firm_code="sharma-associates",
-                firm_name="Sharma & Associates, Chartered Accountants",
-                frn="012345S",
-                constitution="PARTNERSHIP",
-                head_office_city="Hyderabad"
-            )
-            db.add(firm)
-            db.flush()
+    matches = db.execute(select(User).where(User.phone == identifier)).scalars().all()
+    if len(matches) > 1:
+        logger.error("Phone %s belongs to %d users; refusing ambiguous login", identifier, len(matches))
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This number is registered more than once. Contact your administrator.")
+    user = matches[0] if matches else None
 
-        if matched_persona:
-            user = User(
-                firm_id=firm.id,
-                email=matched_persona["email"],
-                phone=matched_persona["phone"],
-                full_name=matched_persona["full_name"],
-                role=matched_persona["role"],
-                membership_no=matched_persona["membership_no"],
-                hashed_password=get_password_hash("FIREBASE_AUTH_PROVIDER"),
-                is_active=True,
-                mfa_enabled=True
-            )
-        else:
-            is_email = "@" in identifier
-            user = User(
-                firm_id=firm.id,
-                email=identifier if is_email else f"{identifier.replace('+', '')}@cafirm.in",
-                phone=identifier if not is_email else "+919876543210",
-                full_name="CA Practitioner" if not is_email else identifier.split("@")[0].title(),
-                role=UserRole.PARTNER.value,
-                membership_no="ICAI-509123",
-                hashed_password=get_password_hash("FIREBASE_AUTH_PROVIDER"),
-                is_active=True,
-                mfa_enabled=True
-            )
-        db.add(user)
-        db.commit()
-        db.refresh(user)
+    if user is None:
+        user = _bootstrap_user(db, identifier)
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This number is not registered with any firm. Ask your firm's administrator to add you.",
+        )
+    if not user.is_active:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This account is deactivated.")
 
     # SQC 1 Audit Log
     try:
@@ -393,5 +419,5 @@ def get_my_profile(
 
 @router.get("/demo-personas", response_model=List[Dict[str, Any]])
 def list_demo_personas():
-    """Provides standard CA firm personas for quick 1-click testing."""
-    return DEMO_PERSONAS
+    """Provides standard CA firm personas for quick 1-click testing (local development only)."""
+    return DEMO_PERSONAS if settings.DEBUG else []
