@@ -5,12 +5,48 @@ services:
     rootDir: backend
     plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    startCommand: alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
     envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      # Production posture: the app refuses to boot with DEBUG=false until every
+      # required secret below is set (see app/core/config.py validators).
       - key: DEBUG
+        value: "false"
+      - key: OTP_SANDBOX_MODE
+        value: "false"
+      - key: SECRET_KEY
+        generateValue: true
+      - key: GSP_SIMULATION_MODE     # must be explicit in production; "true" only for demos
         value: "true"
-      - key: APP_NAME
-        value: "CA Agentic Compliance Platform"
+      - key: DATABASE_URL              # postgresql://ca_api:...?sslmode=require  (see db/provision_roles.sql)
+        sync: false
+      - key: DATABASE_ADMIN_URL        # postgresql://ca_owner:...  used only by `alembic upgrade head`
+        sync: false
+      - key: DB_APP_ROLE               # RLS role the API drops to; production refuses to boot on PostgreSQL without it
+        value: ca_app
+      - key: SHARED_STORE_URL          # Redis; REQUIRED in production (shared rate limits / replay protection)
+        sync: false
+      - key: DSC_TRUSTED_CA_PEM        # PEM of the certifying authority that issues partner DSCs
+        sync: false
+      - key: PUBLIC_API_URL            # https URL of this service, e.g. https://ca-agentic-backend.onrender.com
+        sync: false
+      - key: PUBLIC_WEB_URL            # https URL of the web app
+        sync: false
+      - key: LOGIN_PROVIDER            # every login is a Firebase phone-OTP sign-in
+        value: firebase
+      - key: FIREBASE_PROJECT_ID       # Firebase console > Project settings > Project ID
+        sync: false
+      - key: FIREBASE_WEB_API_KEY      # Project settings > Your apps > Web app > apiKey (public identifier)
+        sync: false
+      - key: FIREBASE_APP_ID           # Project settings > Your apps > Web app > appId (public identifier)
+        sync: false
+      - key: BOOTSTRAP_ADMIN_PHONE     # +91XXXXXXXXXX: becomes the first Partner on first login only; remove afterwards
+        sync: false
+      - key: DSC_REVOCATION_MODE
+        value: strict
+      - key: CORS_ORIGINS              # JSON list of explicit origins; '*' is refused in production
+        sync: false
 
   - type: web
     name: ca-agentic-frontend

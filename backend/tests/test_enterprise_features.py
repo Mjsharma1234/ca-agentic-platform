@@ -215,7 +215,7 @@ def test_gsp_filing_simulator_with_arn():
         partner_id="srinivas"
     )
     assert res["status"] == "FILED_SUCCESSFULLY"
-    assert res["arn"].startswith("AA36")
+    assert res["arn"].startswith("SIM36")
     assert len(res["arn"]) >= 15
     assert len(res["receipt_sha256"]) == 64
 

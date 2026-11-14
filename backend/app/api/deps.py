@@ -119,27 +119,38 @@ def get_current_user(
             if payload.get("scope") == "signer":
                 return _authorise_signer_token(payload, request, db, auth.credentials)
 
-            email = payload.get("email", "")
-            full_name = payload.get("full_name", "")
-            phone = payload.get("phone", None)
-            membership_no = payload.get("membership_no", None)
+            # Revalidate against the database on every request: role, tenant and is_active are
+            # NOT trusted from the token, so deactivating or demoting a user takes effect
+            # immediately instead of at token expiry.
+            from ..models.tenant import User as UserModel
+
+            try:
+                row = db.execute(
+                    select(UserModel).where(UserModel.id == uuid.UUID(str(user_id)))
+                ).scalar_one_or_none()
+            except ValueError:
+                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token claims.")
+            if row is None or not row.is_active or str(row.firm_id) != str(tenant_id):
+                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Account is not active.")
 
             return User(
-                id=user_id,
-                tenant_id=tenant_id,
-                role=role,
-                email=email,
-                full_name=full_name,
-                phone=phone,
-                membership_no=membership_no
+                id=row.id,
+                tenant_id=row.firm_id,
+                role=row.role,
+                email=row.email or "",
+                full_name=row.full_name or "",
+                phone=getattr(row, "phone", None),
+                membership_no=row.membership_no,
             )
         except jwt.ExpiredSignatureError:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired. Please log in again with OTP.")
         except jwt.PyJWTError:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid session token.")
 
-    # 2. Test Environment Compatibility (Gated strictly to test suites)
-    is_test_env = (
+    # 2. Test Environment Compatibility (test suites only, and never in production:
+    #    the DEBUG gate means no env var alone can open this path when DEBUG=false;
+    #    config also refuses to boot with ALLOW_TEST_AUTH_HEADERS set in production).
+    is_test_env = settings.DEBUG and (
         bool(os.getenv("PYTEST_CURRENT_TEST")) or
         os.getenv("ALLOW_TEST_AUTH_HEADERS", "").lower() in ("true", "1")
     )

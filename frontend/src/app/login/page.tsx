@@ -17,14 +17,19 @@ import {
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { useAuth, AuthUser } from "@/lib/auth-context";
-import { sendFirebasePhoneOtp, confirmFirebasePhoneOtp } from "@/lib/firebase";
+import {
+  sendFirebasePhoneOtp,
+  confirmFirebasePhoneOtp,
+  describeFirebaseError,
+  isFirebaseConfigured,
+} from "@/lib/firebase";
 
 export default function LoginPage() {
   const router = useRouter();
   const { login } = useAuth();
 
   const [channel, setChannel] = useState<"SMS" | "EMAIL">("SMS");
-  const [identifier, setIdentifier] = useState<string>("9876543210");
+  const [identifier, setIdentifier] = useState<string>("");
   const [step, setStep] = useState<"REQUEST" | "VERIFY">("REQUEST");
   
   // 6 individual OTP digits
@@ -37,13 +42,29 @@ export default function LoginPage() {
   const [devOtp, setDevOtp] = useState<string | null>(null);
   const [countdown, setCountdown] = useState<number>(60);
   const [demoPersonas, setDemoPersonas] = useState<any[]>([]);
+  // "firebase": every login is a Firebase phone-OTP sign-in. "otp": built-in OTP (local development only).
+  const [provider, setProvider] = useState<"otp" | "firebase" | null>(null);
+  const firebaseMode = provider === "firebase";
 
   useEffect(() => {
-    // Load demo personas
-    api.getDemoPersonas().then(({ data }) => {
-      if (data && data.length > 0) {
-        setDemoPersonas(data);
+    api.getAuthConfig().then(({ data, error }) => {
+      if (error || !data) {
+        setProvider("otp");
+        setErrorMsg("Cannot reach the server. Check your connection and refresh.");
+        return;
       }
+      setProvider(data.login_provider);
+      if (data.login_provider === "firebase") {
+        setChannel("SMS");
+        setIdentifier("");
+        if (!isFirebaseConfigured()) {
+          setErrorMsg("Phone sign-in is not configured for this deployment. Contact your administrator.");
+        }
+        return;
+      }
+      api.getDemoPersonas().then(({ data: personas }) => {
+        if (personas && personas.length > 0) setDemoPersonas(personas);
+      });
     });
   }, []);
 
@@ -75,21 +96,26 @@ export default function LoginPage() {
       ? `+91${idToSend.replace(/\D/g, "")}` 
       : idToSend.trim();
 
-    // Check if Firebase Auth is requested for Indian SMS
-    if (activeCh === "SMS" && process.env.NEXT_PUBLIC_FIREBASE_API_KEY) {
+    if (firebaseMode) {
+      // Firebase phone OTP is the only way in: no silent fallback to another channel.
+      if (!/^\+91[6-9]\d{9}$/.test(formattedId)) {
+        setLoading(false);
+        setErrorMsg("Enter a valid 10-digit Indian mobile number.");
+        return;
+      }
       try {
         await sendFirebasePhoneOtp(formattedId);
         setLoading(false);
         setStep("VERIFY");
         setCountdown(60);
         setOtpDigits(["", "", "", "", "", ""]);
-        setSuccessMsg(`Firebase SMS verification code dispatched to ${formattedId}.`);
+        setSuccessMsg(`A 6-digit code was sent by SMS to ${formattedId}.`);
         setTimeout(() => inputRefs.current[0]?.focus(), 150);
-        return;
-      } catch (fbErr: any) {
-        console.warn("Firebase Phone Auth fallback to server OTP:", fbErr.message);
-        // Seamless fallback to server multi-provider OTP engine
+      } catch (fbErr) {
+        setLoading(false);
+        setErrorMsg(describeFirebaseError(fbErr));
       }
+      return;
     }
 
     const { data, error } = await api.sendOtp(formattedId, activeCh);
@@ -164,24 +190,24 @@ export default function LoginPage() {
       ? `+91${identifier.replace(/\D/g, "")}` 
       : identifier.trim();
 
-    // Check if confirming via Firebase Phone Auth
-    if (typeof window !== "undefined" && window.confirmationResult) {
+    if (firebaseMode) {
       try {
-        const { idToken } = await confirmFirebasePhoneOtp(fullOtp);
+        const idToken = await confirmFirebasePhoneOtp(fullOtp);
         const { data, error } = await api.verifyFirebaseToken(idToken);
         setLoading(false);
-
         if (error || !data) {
-          setErrorMsg(error || "Firebase session verification failed.");
+          setErrorMsg(error || "Sign-in could not be completed. Please try again.");
           return;
         }
-
-        setSuccessMsg("Firebase phone verification successful! Launching workspace...");
+        setSuccessMsg("Phone verified. Opening your workspace...");
         login(data.user as AuthUser);
-        return;
-      } catch (fbErr: any) {
-        console.warn("Firebase confirm error, trying direct verification fallback:", fbErr.message);
+      } catch (fbErr) {
+        setLoading(false);
+        setOtpDigits(["", "", "", "", "", ""]);
+        setErrorMsg(describeFirebaseError(fbErr));
+        setTimeout(() => inputRefs.current[0]?.focus(), 100);
       }
+      return;
     }
 
     const { data, error } = await api.verifyOtp(formattedId, fullOtp);
@@ -258,7 +284,8 @@ export default function LoginPage() {
 
           {step === "REQUEST" ? (
             <div>
-              {/* Channel Switch Tabs */}
+              {/* Channel Switch Tabs (built-in OTP only; Firebase sign-in is mobile-number based) */}
+              {provider === "otp" && (
               <div className="flex rounded-lg bg-slate-800 p-1 mb-6 border border-slate-700/60">
                 <button
                   type="button"
@@ -291,6 +318,7 @@ export default function LoginPage() {
                   Email Address
                 </button>
               </div>
+              )}
 
               {/* Input Field */}
               <div className="space-y-4">
@@ -330,7 +358,7 @@ export default function LoginPage() {
 
                 <button
                   type="button"
-                  disabled={loading}
+                  disabled={loading || provider === null || (firebaseMode && !isFirebaseConfigured())}
                   onClick={() => handleSendOtp()}
                   className="w-full flex items-center justify-center gap-2 rounded-lg bg-blue-600 hover:bg-blue-500 py-3 text-sm font-semibold text-white shadow-lg shadow-blue-600/30 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                 >
@@ -341,11 +369,17 @@ export default function LoginPage() {
                     </>
                   ) : (
                     <>
-                      Send 6-Digit OTP
+                      {firebaseMode ? "Send OTP by SMS" : "Send 6-Digit OTP"}
                       <ArrowRight className="h-4 w-4" />
                     </>
                   )}
                 </button>
+                {firebaseMode && (
+                  <p className="mt-3 text-center text-xs text-slate-400">
+                    Standard SMS rates may apply. By continuing you agree that your number is sent to Google
+                    (Firebase) to deliver the code and for spam and abuse prevention.
+                  </p>
+                )}
               </div>
             </div>
           ) : (
@@ -426,7 +460,8 @@ export default function LoginPage() {
             </div>
           )}
 
-          {/* Quick Demo Personas */}
+          {/* Quick Demo Personas: local development only */}
+          {provider === "otp" && demoPersonas.length > 0 && (
           <div className="mt-8 pt-6 border-t border-slate-800">
             <div className="flex items-center justify-between mb-3">
               <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
@@ -460,6 +495,7 @@ export default function LoginPage() {
               ))}
             </div>
           </div>
+          )}
         </div>
 
         {/* Invisible reCAPTCHA container for Firebase Phone Auth */}

@@ -33,11 +33,19 @@ const API_CLIENT = {
     return headers;
   },
 
+  authConfig: null,   // GET /auth/config: which sign-in the server uses (firebase | otp) + public Firebase web config
+
   async checkHealth() {
     try {
       const resp = await fetch(`${API_BASE}/health`, { method: 'GET' });
       if (resp.ok) {
         this.isOnline = true;
+        if (!this.authConfig) {
+          try {
+            this.authConfig = await (await fetch(`${API_BASE}/auth/config`)).json();
+            if (this.authConfig.firebase_enabled && typeof CURRENT !== 'undefined' && CURRENT.page === 'login' && typeof route === 'function') route();
+          } catch (e) { this.authConfig = null; }
+        }
         this.updateBadge();
         return true;
       }
@@ -257,6 +265,16 @@ const API_CLIENT = {
     } finally {
       this._flushing = false; this.updateBadge();
     }
+  },
+
+  get firebaseMode() { return !!(this.isOnline && this.authConfig && this.authConfig.firebase_enabled); },
+
+  /* Exchange a verified Firebase ID token for the firm session. */
+  async firebaseSignIn(idToken) {
+    const data = await this._send('POST', '/auth/firebase/verify', { id_token: idToken });
+    this.setToken(data.access_token);
+    try { localStorage.setItem('bahi_user', JSON.stringify(data.user)); } catch (e) { }
+    return data;
   },
 
   async devLogin(staff) {

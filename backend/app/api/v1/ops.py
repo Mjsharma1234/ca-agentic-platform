@@ -170,9 +170,24 @@ def _staff_cols(rec: dict, ctx: Ctx) -> dict:
         "name": _text(rec.get("name"), "name", required=True, limit=150),
         "role": role,
         "email": (_text(rec.get("email"), "email", limit=150) or "").lower() or None,
-        "phone": _text(rec.get("phone"), "phone", limit=20),
+        "phone": _phone(rec.get("phone")),
         "active": rec.get("active", True) is not False,
     }
+
+
+def _phone(value: Any) -> Optional[str]:
+    """Store mobile numbers in E.164 (+91…) so they match Firebase / OTP sign-ins."""
+    raw = _text(value, "phone", limit=20)
+    if not raw:
+        return None
+    from ...deterministic_core.otp_service import OTPService
+    try:
+        normalised, channel = OTPService.normalize_identifier(raw)
+    except ValueError:
+        raise _bad("'phone' is not a valid mobile number")
+    if channel != "SMS":
+        raise _bad("'phone' is not a valid mobile number")
+    return normalised
 
 
 def _obligation_cols(rec: dict, ctx: Ctx) -> dict:
@@ -661,8 +676,9 @@ def import_workspace(req: ImportRequest, user: User = Depends(staff_user), db: S
 @router.post("/dev-login")
 def dev_login(req: DevLoginRequest, db: Session = Depends(get_db)):
     """Local development only: issue a session for a tracker persona without an OTP round-trip.
-    Refused unless DEBUG and OTP sandbox mode are both on, so it can never exist in production."""
-    if not (settings.DEBUG and settings.OTP_SANDBOX_MODE):
+    Refused unless DEBUG and OTP sandbox mode are both on and Firebase is not the login provider, so it can never
+    exist in production or sidestep Firebase phone sign-in."""
+    if not (settings.DEBUG and settings.OTP_SANDBOX_MODE) or settings.effective_login_provider == "firebase":
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found.")
     rec = req.staff or {}
     ref = _ref(rec.get("id"))

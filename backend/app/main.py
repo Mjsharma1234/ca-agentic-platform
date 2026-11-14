@@ -32,10 +32,14 @@ async def lifespan(app: FastAPI):
     enforce_rls_posture(engine, production=not settings.DEBUG)
     yield
 
+# The interactive docs and OpenAPI schema enumerate every route; keep them to local development.
 app = FastAPI(
     title=settings.APP_NAME,
     debug=settings.DEBUG,
-    lifespan=lifespan
+    lifespan=lifespan,
+    docs_url="/docs" if settings.DEBUG else None,
+    redoc_url="/redoc" if settings.DEBUG else None,
+    openapi_url="/openapi.json" if settings.DEBUG else None,
 )
 
 # 1. Security Headers Middleware

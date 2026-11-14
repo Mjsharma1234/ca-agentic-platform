@@ -546,7 +546,7 @@ class CreateEmployeeRequest(BaseModel):
     full_name: str
     email: str
     role: str = Field(default="AR", description="PT (Partner), MG (Manager), SA (Senior Assistant), AR (Article Trainee), PX (Paid Assistant)")
-    phone: Optional[str] = "9876543210"
+    phone: Optional[str] = None  # mobile used for Firebase / OTP sign-in; stored as +91…
     membership_no: Optional[str] = None  # ICAI MRN for CAs, or SRO/WRO/CRO for Articles
     focus: Optional[str] = "GST & Statutory Compliance"
     stipend_or_cost: Optional[float] = 12000.0
@@ -579,11 +579,24 @@ def create_employee_id(
     if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
         raise HTTPException(status_code=422, detail="A valid email address is required.")
 
+    phone = None
+    if req.phone and req.phone.strip():
+        from ...deterministic_core.otp_service import OTPService
+        try:
+            phone, channel = OTPService.normalize_identifier(req.phone)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+        if channel != "SMS":
+            raise HTTPException(status_code=422, detail="Phone must be a mobile number.")
+        req.phone = phone
+
     tenant = current_user.tenant_id
     from ...core.tenant_context import system_scope
     with system_scope(db):  # emails are unique across firms
         if db.execute(select(UserModel.id).where(UserModel.email == email)).first():
             raise HTTPException(status_code=409, detail="Someone with this email already has an account.")
+        if req.phone and db.execute(select(UserModel.id).where(UserModel.phone == req.phone)).first():
+            raise HTTPException(status_code=409, detail="This mobile number already belongs to another account.")
 
     role_mapping = {"PT": UserRole.PARTNER.value, "MP": UserRole.PARTNER.value, "MG": UserRole.MANAGER.value,
                     "CC": UserRole.MANAGER.value}

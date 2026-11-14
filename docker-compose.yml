@@ -8,10 +8,12 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - DATABASE_URL=postgresql://ca_user:ca_password@postgres:5432/ca_platform
-      - SECRET_KEY=enterprise-jwt-secret-key-change-in-production-2026
+      # Set these in a local .env file next to this compose file (never commit real values):
+      #   POSTGRES_PASSWORD=<random>  SECRET_KEY=<random 32+ chars>
+      - DATABASE_URL=postgresql://ca_user:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/ca_platform
+      - SECRET_KEY=${SECRET_KEY:?set SECRET_KEY in .env}
       - APP_NAME=CA Firm OS Platform
-      - DEBUG=false
+      - DEBUG=${DEBUG:-true}
       - CORS_ORIGINS=["https://firmosweb.vercel.app","http://localhost:3000","http://localhost:8000"]
     depends_on:
       postgres:
@@ -25,10 +27,11 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: ca_user
-      POSTGRES_PASSWORD: ca_password
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       POSTGRES_DB: ca_platform
     ports:
-      - "5432:5432"
+      # Loopback only: the DB is reachable from this machine, never from the network.
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:

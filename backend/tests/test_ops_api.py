@@ -5,17 +5,29 @@ from datetime import timedelta
 import pytest
 from fastapi.testclient import TestClient
 
-from app.core.database import create_tables
+from app.core.database import create_tables, SessionLocal
 from app.core.security import create_access_token
+from app.models.tenant import Firm, User
 from app.main import app
 
 client = TestClient(app)
 
 
 def _token(tenant, role="PARTNER", email=None):
+    # Sessions are revalidated against the users table on every request, so the
+    # user (and its firm) must really exist for the token to be honoured.
     uid = uuid.uuid4()
+    email = email or f"{uid.hex[:8]}@firm.test"
+    with SessionLocal() as db:
+        if db.get(Firm, tenant) is None:
+            db.add(Firm(id=tenant, firm_code=f"fx-{uuid.UUID(str(tenant)).hex[:10]}", firm_name="Test Firm"))
+        # emails are globally unique; drop any leftover from a previous run so the suite is re-runnable
+        db.query(User).filter(User.email == email).delete(synchronize_session=False)
+        db.add(User(id=uid, firm_id=tenant, email=email, full_name="Test Person",
+                    role=role, hashed_password="x", is_active=True))
+        db.commit()
     return create_access_token(
-        {"sub": str(uid), "tenant_id": str(tenant), "role": role, "email": email or f"{uid.hex[:8]}@firm.test",
+        {"sub": str(uid), "tenant_id": str(tenant), "role": role, "email": email,
          "full_name": "Test Person"},
         expires_delta=timedelta(minutes=30),
     )
@@ -183,3 +195,14 @@ def test_import_only_into_an_empty_firm(firm):
     assert client.post("/api/v1/ops/workspace/import", json=payload, headers=_h(tenant)).status_code == 409
     ws = client.get("/api/v1/ops/workspace", headers=_h(tenant)).json()
     assert ws["notices"][0]["type"] == "ASMT-10" and ws["settings"]["automations"] == {"a1": True}
+
+
+def test_dev_login_is_closed_when_firebase_is_the_provider(monkeypatch):
+    from app.core.config import settings
+    body = {"staff": {"id": "srinivas", "name": "CA Srinivas", "role": "MP"}}
+    monkeypatch.setattr(settings, "LOGIN_PROVIDER", "firebase")
+    monkeypatch.setattr(settings, "FIREBASE_PROJECT_ID", "proj")
+    assert client.post("/api/v1/ops/dev-login", json=body).status_code == 404
+    monkeypatch.setattr(settings, "LOGIN_PROVIDER", "otp")
+    monkeypatch.setattr(settings, "DEBUG", False)
+    assert client.post("/api/v1/ops/dev-login", json=body).status_code == 404
