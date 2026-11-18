@@ -1,20 +1,12 @@
-"""End-to-end API security tests: authN/Z, tenant isolation, four-eyes, and the G7
-desktop-signer challenge/response protocol (the signing helper below is the reference
-implementation of what the desktop signer does on the USB token).
-"""
-import base64
+"""End-to-end API security tests: authN/Z, tenant isolation and four-eyes gate decisions."""
 import hashlib
 import json
 import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from cryptography import x509
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import padding, rsa
-from cryptography.x509.oid import NameOID
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -22,39 +14,16 @@ from app.core.database import Base, get_db
 from app.core.security import create_access_token
 from app.deterministic_core.audit_chain import verify_firm_audit_chain
 from app.main import app
-from app.models import Client, Firm, GateDecision, GSTReturn, SigningRequest, User
+from app.models import Client, Firm, GateDecision, GSTReturn, User
 from app.models.clients import ClientStatus, ClientType, ERPType, RiskTier
 from app.models.gates import GateStatus, GateTier, RequiredRole
 from app.models.returns import ReturnStatus, ReturnType
-from app.models.signing import SigningStatus
 
 FIRM_A = uuid.UUID("aaaaaaaa-0000-0000-0000-000000000001")
 FIRM_B = uuid.UUID("bbbbbbbb-0000-0000-0000-000000000001")
 
 
 # ----------------------------------------------------------------------------- helpers
-def make_cert(*, bits=2048, days_valid=365, start_offset_days=-1, cn="CA Test Partner"):
-    key = rsa.generate_private_key(public_exponent=65537, key_size=bits)
-    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, cn)])
-    now = datetime.now(timezone.utc)
-    cert = (
-        x509.CertificateBuilder()
-        .subject_name(name).issuer_name(name).public_key(key.public_key())
-        .serial_number(x509.random_serial_number())
-        .not_valid_before(now + timedelta(days=start_offset_days))
-        .not_valid_after(now + timedelta(days=start_offset_days + days_valid))
-        .add_extension(x509.KeyUsage(True, True, False, False, False, False, False, False, False), critical=True)
-        .sign(key, hashes.SHA256())
-    )
-    return key, cert.public_bytes(serialization.Encoding.PEM).decode()
-
-
-def sign(key, message_b64: str) -> str:
-    return base64.b64encode(
-        key.sign(base64.b64decode(message_b64), padding.PKCS1v15(), hashes.SHA256())
-    ).decode()
-
-
 def token(user: User, tenant=None) -> dict:
     t = create_access_token({"sub": str(user.id), "tenant_id": str(tenant or user.firm_id), "role": user.role})
     return {"Authorization": f"Bearer {t}"}
@@ -112,7 +81,7 @@ def env():
         evidence_pack={"description": "Review GSTR-3B"}, sla_deadline=datetime.now(timezone.utc) + timedelta(hours=2),
     )
     g7 = GateDecision(
-        tenant_id=FIRM_A, client_id=client.id, gate_id="G7", gate_name="Partner DSC Signing",
+        tenant_id=FIRM_A, client_id=client.id, gate_id="G7", gate_name="Partner Approval",
         entity_type="GST_RETURN", entity_id=ret.id, tier=GateTier.L3_PARTNER, required_role=RequiredRole.PARTNER,
         evidence_pack={}, sla_deadline=datetime.now(timezone.utc) + timedelta(hours=24),
     )
@@ -133,29 +102,14 @@ def env():
     engine.dispose()
 
 
-def open_request(env, hdr, signer, **over):
-    body = {
-        "entity_type": "GST_RETURN", "entity_id": str(env["ret"].id), "document_hash": env["ret"].payload_hash,
-        "document_label": "GSTR-3B Oct 2026", "signer_id": str(signer.id),
-    }
-    body.update(over)
-    return env["http"].post("/api/v1/signing/requests", json=body, headers=hdr)
-
-
 def reviewed(env):
     r = env["db"].get(GSTReturn, env["ret"].id)
     r.status, r.reviewer_id = ReturnStatus.REVIEWED, env["users"]["manager"].id
     env["db"].commit()
 
 
-def register(env, partner, **kw):
-    key, pem = make_cert(**kw)
-    res = env["http"].post("/api/v1/signing/certificates", json={"certificate_pem": pem}, headers=token(partner))
-    return key, pem, res
-
-
 # ----------------------------------------------------------------------------- authN / authZ
-@pytest.mark.parametrize("path", ["/api/v1/gates", "/api/v1/clients/", "/api/v1/dashboard/overview", "/api/v1/signing/requests/pending"])
+@pytest.mark.parametrize("path", ["/api/v1/gates", "/api/v1/clients/", "/api/v1/dashboard/overview", "/api/v1/returns/"])
 def test_unauthenticated_requests_are_rejected(env, path):
     assert env["http"].get(path).status_code == 401
 
@@ -182,148 +136,6 @@ def test_tenant_isolation(env):
     assert env["http"].post(f"/api/v1/gates/{env['g6'].id}/approve", json={}, headers=other).status_code == 404
 
 
-# ----------------------------------------------------------------------------- DSC registration
-def test_register_certificate_happy_path_and_duplicate(env):
-    _, pem, res = register(env, env["users"]["partner"])
-    assert res.status_code == 201
-    dup = env["http"].post("/api/v1/signing/certificates", json={"certificate_pem": pem}, headers=token(env["users"]["partner2"]))
-    assert dup.status_code == 409
-
-
-@pytest.mark.parametrize("kw,fragment", [
-    ({"bits": 1024}, "too small"),
-    ({"start_offset_days": -400, "days_valid": 30}, "validity"),
-])
-def test_register_rejects_weak_or_expired_certificates(env, kw, fragment):
-    _, _, res = register(env, env["users"]["partner"], **kw)
-    assert res.status_code == 422 and fragment in res.json()["detail"]
-
-
-def test_only_partners_register_certificates(env):
-    _, _, res = register(env, env["users"]["manager"])
-    assert res.status_code == 403
-
-
-# ----------------------------------------------------------------------------- signing flow
-def test_full_signing_flow_updates_return_and_audit_chain(env):
-    reviewed(env)
-    partner = env["users"]["partner"]
-    key, pem, _ = register(env, partner)
-
-    created = open_request(env, token(env["users"]["manager"]), partner)
-    assert created.status_code == 201, created.text
-    assert "nonce" not in created.json()  # requesters never see the challenge nonce
-
-    pending = env["http"].get("/api/v1/signing/requests/pending", headers=token(partner)).json()
-    assert len(pending) == 1
-    done = env["http"].post(
-        f"/api/v1/signing/requests/{pending[0]['id']}/complete",
-        json={"signature_b64": sign(key, pending[0]["message_b64"]), "certificate_pem": pem, "signer_device": "test-rig"},
-        headers=token(partner),
-    )
-    assert done.status_code == 200 and done.json()["status"] == "SIGNED"
-
-    env["db"].expire_all()
-    ret = env["db"].get(GSTReturn, env["ret"].id)
-    assert ret.status == ReturnStatus.SIGNED and ret.signing_partner_id == partner.id
-    assert verify_firm_audit_chain(env["db"], FIRM_A)["chain_valid"] is True
-
-    replay = env["http"].post(
-        f"/api/v1/signing/requests/{pending[0]['id']}/complete",
-        json={"signature_b64": sign(key, pending[0]["message_b64"]), "certificate_pem": pem}, headers=token(partner),
-    )
-    assert replay.status_code == 409  # single use
-
-
-def test_prepare_returns_server_held_hash_and_eligible_partners(env):
-    reviewed(env)
-    q = f"/api/v1/signing/prepare?entity_type=GST_RETURN&entity_id={env['ret'].id}"
-    assert env["http"].get(q, headers=token(env["users"]["preparer"])).status_code == 403
-    res = env["http"].get(q, headers=token(env["users"]["manager"]))
-    assert res.status_code == 200
-    body = res.json()
-    assert body["document_hash"] == env["ret"].payload_hash
-    assert {s["id"] for s in body["eligible_signers"]} == {str(env["users"]["partner"].id), str(env["users"]["partner2"].id)}
-    other = token(env["users"]["other_partner"])
-    assert env["http"].get(q, headers=other).status_code == 404
-
-
-def test_request_creation_guards(env):
-    reviewed(env)
-    partner, manager = env["users"]["partner"], env["users"]["manager"]
-    assert open_request(env, token(env["users"]["preparer"]), partner).status_code == 403
-    assert open_request(env, token(manager), partner, document_hash="0" * 64).status_code == 409
-    assert open_request(env, token(manager), partner, document_hash="XYZ").status_code == 422
-    assert open_request(env, token(manager), env["users"]["manager"]).status_code == 422  # signer must be a partner
-    assert open_request(env, token(manager), env["users"]["other_partner"]).status_code == 422  # cross-tenant signer
-    assert open_request(env, token(manager), partner).status_code == 201
-    assert open_request(env, token(manager), partner).status_code == 409  # duplicate pending
-
-
-def test_unreviewed_return_cannot_be_signed(env):
-    res = open_request(env, token(env["users"]["manager"]), env["users"]["partner"])
-    assert res.status_code == 409 and "four-eyes" in res.json()["detail"].lower()
-
-
-def test_preparer_cannot_be_signer(env):
-    reviewed(env)
-    r = env["db"].get(GSTReturn, env["ret"].id)
-    r.preparer_id = env["users"]["partner"].id
-    env["db"].commit()
-    res = open_request(env, token(env["users"]["manager"]), env["users"]["partner"])
-    assert res.status_code == 409 and "preparer" in res.json()["detail"]
-
-
-def test_wrong_signature_unregistered_cert_and_other_partner(env):
-    reviewed(env)
-    partner, partner2 = env["users"]["partner"], env["users"]["partner2"]
-    key, pem, _ = register(env, partner)
-    created = open_request(env, token(env["users"]["manager"]), partner).json()
-    pending = env["http"].get("/api/v1/signing/requests/pending", headers=token(partner)).json()[0]
-    url = f"/api/v1/signing/requests/{created['id']}/complete"
-
-    # another partner may not complete it
-    assert env["http"].post(url, json={"signature_b64": "A" * 80, "certificate_pem": pem}, headers=token(partner2)).status_code == 403
-
-    # a valid signature from an unregistered key is refused
-    rogue_key, rogue_pem = make_cert()
-    r = env["http"].post(url, json={"signature_b64": sign(rogue_key, pending["message_b64"]), "certificate_pem": rogue_pem}, headers=token(partner))
-    assert r.status_code == 403
-
-    # a registered key signing the WRONG bytes is refused; the rogue attempt above already
-    # used one of the 3 strikes, so the request locks after two more
-    wrong = base64.b64encode(b"some other document").decode()
-    for _ in range(2):
-        r = env["http"].post(url, json={"signature_b64": sign(key, wrong), "certificate_pem": pem}, headers=token(partner))
-        assert r.status_code == 422
-    final = env["http"].post(url, json={"signature_b64": sign(key, pending["message_b64"]), "certificate_pem": pem}, headers=token(partner))
-    assert final.status_code == 409  # FAILED requests cannot be revived
-    env["db"].expire_all()
-    assert env["db"].get(GSTReturn, env["ret"].id).status == ReturnStatus.SIGNING_PENDING
-
-
-def test_expired_request_cannot_be_completed(env):
-    reviewed(env)
-    partner = env["users"]["partner"]
-    key, pem, _ = register(env, partner)
-    created = open_request(env, token(env["users"]["manager"]), partner).json()
-    msg = env["http"].get("/api/v1/signing/requests/pending", headers=token(partner)).json()[0]["message_b64"]
-    row = env["db"].get(SigningRequest, uuid.UUID(created["id"]))
-    row.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
-    env["db"].commit()
-    r = env["http"].post(f"/api/v1/signing/requests/{created['id']}/complete",
-                         json={"signature_b64": sign(key, msg), "certificate_pem": pem}, headers=token(partner))
-    assert r.status_code == 409 and "EXPIRED" in r.json()["detail"]
-
-
-def test_partner_can_reject_a_request(env):
-    reviewed(env)
-    partner = env["users"]["partner"]
-    created = open_request(env, token(env["users"]["manager"]), partner).json()
-    r = env["http"].post(f"/api/v1/signing/requests/{created['id']}/reject", json={"reason": "figures disputed"}, headers=token(partner))
-    assert r.status_code == 200 and r.json()["status"] == "REJECTED"
-
-
 # ----------------------------------------------------------------------------- gates
 def test_g6_four_eyes_and_return_state(env):
     url = f"/api/v1/gates/{env['g6'].id}/approve"
@@ -348,20 +160,12 @@ def test_reject_and_escalate_require_a_reason(env):
     assert esc.status_code == 200 and esc.json()["status"] == "escalated"
 
 
-def test_g7_requires_verified_desktop_signature(env):
+def test_g7_is_an_ordinary_partner_approval(env):
     reviewed(env)
-    partner = env["users"]["partner"]
     url = f"/api/v1/gates/{env['g7'].id}/approve"
     assert env["http"].post(url, json={}, headers=token(env["users"]["manager"])).status_code == 403
-    blocked = env["http"].post(url, json={}, headers=token(partner))
-    assert blocked.status_code == 409 and "desktop-signer" in blocked.json()["detail"]
-
-    key, pem, _ = register(env, partner)
-    open_request(env, token(env["users"]["manager"]), partner)
-    p = env["http"].get("/api/v1/signing/requests/pending", headers=token(partner)).json()[0]
-    env["http"].post(f"/api/v1/signing/requests/{p['id']}/complete",
-                     json={"signature_b64": sign(key, p["message_b64"]), "certificate_pem": pem}, headers=token(partner))
-    assert env["http"].post(url, json={"notes": "signed"}, headers=token(partner)).status_code == 200
+    ok = env["http"].post(url, json={"notes": "approved"}, headers=token(env["users"]["partner"]))
+    assert ok.status_code == 200 and ok.json()["status"] == "approved"
 
 
 # ----------------------------------------------------------------------------- clients / dashboard
@@ -411,15 +215,5 @@ def test_production_config_fails_closed():
         Settings(DEBUG=False)  # default secret
     with pytest.raises(ValueError):
         Settings(DEBUG=False, SECRET_KEY="x" * 40)  # OTP sandbox still on
-    with pytest.raises(ValueError, match="trust anchor"):
-        Settings(DEBUG=False, SECRET_KEY="x" * 40, OTP_SANDBOX_MODE=False)  # no DSC CA configured
-
-
-def test_server_side_pin_signing_disabled_in_production(env, monkeypatch):
-    from app.core.config import settings
-    monkeypatch.setattr(settings, "DEBUG", False)
-    res = env["http"].post(
-        "/api/v1/firm-os/dsc/sign",
-        json={"item_id": "i", "partner_id": "p", "pin": "123456"}, headers=token(env["users"]["partner"]),
-    )
-    assert res.status_code in (404, 410)
+    with pytest.raises(ValueError, match="Firebase"):
+        Settings(DEBUG=False, SECRET_KEY="x" * 40, OTP_SANDBOX_MODE=False)  # login provider not firebase

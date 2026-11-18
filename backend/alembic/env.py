@@ -25,8 +25,7 @@ _PG_TUNING_INDEXES = {
     "ix_invoices_tenant_client_date", "ix_gst_returns_tenant_client_period", "ix_gate_decisions_tenant_created",
     "ix_firm_obligations_tenant_due", "ix_firm_obligations_tenant_state", "ix_firm_notices_tenant_hearing",
     "ix_firm_daybook_tenant_day", "ix_firm_gate_logs_tenant_decided", "ix_audit_ledger_tenant_created",
-    "ix_signing_requests_tenant_status", "ix_signing_requests_tenant_expiry", "ix_signer_devices_tenant_active",
-    "ix_dsc_certificates_tenant_user", "ix_clients_tenant_name_live", "ix_client_gstins_tenant_client",
+    "ix_clients_tenant_name_live", "ix_client_gstins_tenant_client",
     "ix_users_phone", "ix_client_gstins_client_id", "ix_otp_records_identifier_created", "ix_otp_records_expires",
     "brin_audit_ledger_created", "brin_audit_blocks_timestamp",
 }

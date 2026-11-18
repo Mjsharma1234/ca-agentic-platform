@@ -5,12 +5,9 @@ to text a code, Firebase confirms it, and the app sends the resulting **ID token
 The API verifies the token and issues the platform's own RBAC session token. The Firebase session is kept in memory
 and signed out straight after that exchange.
 
-This applies to both web apps:
-
-- **Firm OS web (`firm_os_web/`, the ops tracker)** reads its Firebase web config from `GET /api/v1/auth/config`,
+The Firm OS web app (`firm_os_web/`, the ops tracker) reads its Firebase web config from `GET /api/v1/auth/config`,
   so the static site needs no build-time variables. The SDK is loaded from Firebase's CDN only when the server
   says Firebase is on (`js/firebase-login.js`).
-- **Next.js app (`frontend/`)** reads `NEXT_PUBLIC_FIREBASE_*` at build time and keeps the session in an httpOnly cookie.
 
 ## Set-up (once)
 
@@ -37,15 +34,14 @@ This applies to both web apps:
    | `BOOTSTRAP_ADMIN_PHONE` | `+91…` of the first partner, for the first deployment only |
 
    In production (`DEBUG=false`) the API refuses to start without `FIREBASE_PROJECT_ID`.
-5. Next.js app only: `frontend/.env.example` (`NEXT_PUBLIC_FIREBASE_API_KEY`, `_AUTH_DOMAIN`, `_PROJECT_ID`, `_APP_ID`).
-6. Recommended against SMS-pumping cost: enable **App Check** (reCAPTCHA Enterprise), set an **SMS region policy**
+5. Recommended against SMS-pumping cost: enable **App Check** (reCAPTCHA Enterprise), set an **SMS region policy**
    allowing India only, and set a daily SMS quota.
-7. Testing without real SMS: **Authentication > Sign-in method > Phone > Phone numbers for testing** registers
+6. Testing without real SMS: **Authentication > Sign-in method > Phone > Phone numbers for testing** registers
    up to 10 fictional numbers with a fixed code. No SMS is sent and they use no quota. Their tokens are signed like
    real ones, so the API treats them as real users: pick hard-to-guess codes, rotate them, never reuse a number
    that belongs to a real person, and remove them before go-live. Never ship `appVerificationDisabledForTesting`
    or hard-coded test numbers.
-8. Privacy: Google stores the phone number for spam and abuse prevention, so both login screens tell people their
+7. Privacy: Google stores the phone number for spam and abuse prevention, so the login screen tells people their
    number is sent to Google (Firebase) before they request a code. Keep that notice if you restyle the screen.
    Firebase also throttles SMS per number; throttled requests fail with `auth/too-many-requests`.
 

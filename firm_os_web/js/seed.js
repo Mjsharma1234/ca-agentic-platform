@@ -34,8 +34,8 @@ const CAPS = [
   { k: 'g3_high', n: 'Commit invoice / credit decisions above ₹50,000', grp: 'Production', roles: ['MP', 'PT'] },
   { k: 'g5', n: 'Second-approve hand-typed journals (G5)', grp: 'Production', roles: ['MP', 'PT', 'MG', 'SA'] },
   { k: 'g17', n: 'Release payroll & PF (G17)', grp: 'Production', roles: ['MP', 'PT', 'MG', 'PX'] },
-  { k: 'sign', n: 'Sign with DSC (G7)', grp: 'Personal professional acts', roles: ['MP', 'PT'], locked: true },
-  { k: 'udin', n: 'Generate UDIN (G8)', grp: 'Personal professional acts', roles: ['MP', 'PT'], locked: true },
+  { k: 'sign', n: 'Partner sign-off (G7)', grp: 'Personal professional acts', roles: ['MP', 'PT'], locked: true },
+  { k: 'release', n: 'Release audit reports (G8)', grp: 'Personal professional acts', roles: ['MP', 'PT'], locked: true },
   { k: 'certify', n: 'Certify reconciliations & reports (G15)', grp: 'Personal professional acts', roles: ['MP', 'PT'], locked: true },
   { k: 'position', n: 'Take tax positions & approve rules (G14)', grp: 'Personal professional acts', roles: ['MP', 'PT'], locked: true },
   { k: 'notice', n: 'Reply to tax authorities (G11)', grp: 'Personal professional acts', roles: ['MP', 'PT'], locked: true },
@@ -46,14 +46,11 @@ const CAPS = [
   { k: 'send', n: 'Click send on client documents (G12)', grp: 'Client contact', roles: ['MP', 'PT', 'MG', 'SA', 'CC', 'FO'] },
   { k: 'g10', n: 'Answer routed client messages (G10)', grp: 'Client contact', roles: ['MP', 'PT', 'MG', 'SA', 'CC', 'FO'] },
   { k: 'automations', n: 'Edit client automations & templates', grp: 'Client contact', roles: ['MP', 'PT', 'CC'] },
-  { k: 'creds', n: 'Reveal client portal credentials', grp: 'Security', roles: ['MP', 'PT', 'MG'], note: 'Every reveal is logged with a reason' },
-  { k: 'dsc_custody', n: 'Issue / receive DSC tokens', grp: 'Security', roles: ['MP', 'PT', 'FO'] },
   { k: 'connectors', n: 'Manage connectors & secrets', grp: 'Security', roles: ['MP'] },
   { k: 'agents', n: 'Switch any routine to shadow (on-call)', grp: 'Security', roles: ['MP', 'PT', 'MG'] },
   { k: 'promote', n: 'Promote a routine out of shadow', grp: 'Security', roles: ['MP'], locked: true },
   { k: 'access', n: 'Edit roles & ethical walls', grp: 'Security', roles: ['MP'], locked: true },
-  { k: 'export', n: 'Export data (watermarked)', grp: 'Security', roles: ['MP', 'PT', 'MG'] },
-  { k: 'agent_file', n: 'File · sign · submit — by any automation', grp: 'Assigned to nobody', roles: [], never: true }
+  { k: 'export', n: 'Export data (watermarked)', grp: 'Security', roles: ['MP', 'PT', 'MG'] }
 ];
 
 const TEAM = [
@@ -68,7 +65,7 @@ const TEAM = [
   { id: 'vamsi', name: 'Vamsi Krishna', short: 'Vamsi', role: 'AR', color: '#4E5361', focus: 'Article · year 2 · GST & books', since: 2025, cost: 9000, article: { start: '2025-02-10', reg: 'Form 103 · registered', stipend: 9000, study: 12 }, status: 'In office' },
   { id: 'pooja', name: 'Pooja Nair', short: 'Pooja', role: 'AR', color: '#475457', focus: 'Article · year 1 · audit', since: 2026, cost: 7500, article: { start: '2026-01-05', reg: 'Form 103 · registered', stipend: 7500, study: 6 }, status: 'Client site · Deccan Pharma' },
   { id: 'rohit', name: 'Rohit Jain', short: 'Rohit', role: 'AR', color: '#4D5566', focus: 'Article · year 3 · direct tax', since: 2024, cost: 10000, article: { start: '2024-03-18', reg: 'Form 103 · registered', stipend: 10000, study: 22 }, status: 'Study leave' },
-  { id: 'imran', name: 'Imran Shaikh', short: 'Imran', role: 'FO', color: '#585A5F', focus: 'Front office · inward / outward · DSC custody', since: 2019, cost: 28000, status: 'In office' }
+  { id: 'imran', name: 'Imran Shaikh', short: 'Imran', role: 'FO', color: '#585A5F', focus: 'Front office · inward / outward', since: 2019, cost: 28000, status: 'In office' }
 ];
 /* Untouched copy of the demo team: TEAM itself is replaced by the firm's staff once signed in. */
 const TEAM_SEED = TEAM.map(t => ({ ...t }));
@@ -102,8 +99,8 @@ const CLIENTS = [
   { id: 'c25', name: 'K. Raghava', short: 'K. Raghava', type: 'Individual · director', pan: 'AKRPR5521L', state: 'TS', city: 'Hyderabad', tags: ['ind', 'adv'], partner: 'srinivas', manager: 'divya', team: ['rohit'], turnover: 0, fee: 30000, lang: 'Telugu-English', channel: 'WhatsApp', risk: 'Low', health: 90, since: 2019, contact: 'K. Raghava', books: '—' }
 ];
 
-/* ---------- the 27 autopilot routines ---------- */
-const ROUTINE_NAMES = {'IN-1': 'Intake', 'IN-2': 'Chaser', 'IN-3': 'Classifier', 'IN-4': 'Bank match', 'GS-1': 'Sales match', 'GS-2': 'IMS triage', 'GS-3': 'Credit match', 'GS-4': 'Supplier chase', 'DT-2': 'AIS match', 'GS-5': 'Return builder', 'DT-1': 'TDS check', 'DT-4': 'ITR builder', 'CO-1': 'Secretarial', 'PY-1': 'Payroll', 'AU-1': 'Audit file', 'AU-2': '3CD clauses', 'GS-6': 'Annual GST', 'DT-3': 'Advance tax', 'FL-1': 'Filing tracker', 'FO-1': 'Capacity', 'FO-3': 'Billing', 'CL-1': 'Front desk', 'CL-2': 'Notice reader', 'FO-2': 'Exceptions', 'FO-4': 'Rule watch', 'FO-5': 'Quality check', 'KN-1': 'Reference desk'};
+/* ---------- the autopilot routines ---------- */
+const ROUTINE_NAMES = {'IN-1': 'Intake', 'IN-2': 'Chaser', 'IN-3': 'Classifier', 'IN-4': 'Bank match', 'GS-1': 'Sales match', 'GS-2': 'IMS triage', 'GS-3': 'Credit match', 'GS-4': 'Supplier chase', 'DT-2': 'AIS match', 'GS-5': 'Return builder', 'DT-1': 'TDS check', 'DT-4': 'ITR builder', 'CO-1': 'Secretarial', 'PY-1': 'Payroll', 'AU-1': 'Audit file', 'AU-2': '3CD clauses', 'GS-6': 'Annual GST', 'DT-3': 'Advance tax', 'FO-1': 'Capacity', 'FO-3': 'Billing', 'CL-1': 'Front desk', 'CL-2': 'Notice reader', 'FO-2': 'Exceptions', 'FO-4': 'Rule watch', 'FO-5': 'Quality check', 'KN-1': 'Reference desk'};
 const AGENTS = [
   ['IN-1', 'Document intake & extraction', 'Getting the papers in', 'advises', 'G2', 'L1', 'Reads everything that arrives on any channel, classifies, de-duplicates and lifts figures with a confidence score on every value.', ['vault.store_original', 'doc.classify', 'doc.extract', 'obligation.attach', 'queue.g2']],
   ['IN-2', 'Document chase', 'Getting the papers in', 'advises', 'G1', 'L1', 'Writes the exact request for this client, this month, in their language, and follows the 3-day / 1-day / overdue ladder.', ['client.message_template', 'checklist.read', 'queue.g1']],
@@ -123,7 +120,6 @@ const AGENTS = [
   ['AU-2', 'Tax audit clause data', 'Seasonal work', 'prepares', 'G6', 'L2', 'Evidences 40+ clauses of Form 3CD; factual clauses need written client confirmation.', ['books.read', 'clause.evidence', 'client.confirm_request']],
   ['GS-6', 'Annual GST reconciliation', 'Seasonal work', 'prepares', 'G15', 'L2', 'Explains audited accounts vs twelve months of filings from the difference log, not memory.', ['difflog.read', 'gst.read_returns', 'pack.build']],
   ['DT-3', 'Advance tax forecast', 'Seasonal work', 'prepares', 'G4', 'L2', 'Forecasts full-year tax and tells the client the number and the assumptions ten days before each instalment.', ['books.read', 'compute.tax', 'client.intimation_draft']],
-  ['FL-1', 'Filing tracker', 'Keeping time', 'advises', '—', 'L1', 'Watches every portal until the acknowledgement lands; translates rejections; closes nothing without a reference.', ['portal.poll_status', 'ack.capture', 'alert.partner']],
   ['FO-1', 'Capacity & signing ceiling', 'Watching the firm', 'advises', '—', 'L1', 'Forecasts workload and counts tax audits signed against the 60-report ceiling across every firm.', ['timesheet.read', 'ceiling.count']],
   ['FO-3', 'Billing & recovery', 'Watching the firm', 'prepares', 'G9', 'L2', 'Turns finished work into an itemised draft invoice and chases what is owed.', ['ledger.read_work', 'invoice.draft', 'queue.g9']],
   ['CL-1', 'Client front desk', 'Facing outward', 'advises', 'G10', 'L1', 'Answers only seven enumerated questions from stored data; routes everything else to a named person.', ['status.lookup', 'client.reply_closed_list', 'queue.g10']],
@@ -133,7 +129,7 @@ const AGENTS = [
   ['FO-5', 'Quality review', 'Watching the firm', 'advises', '—', 'L1', 'Re-performs a sample of finished work and injects known-defective proposals to test that reviewers still read.', ['ledger.read_work', 'sample.reperform', 'canary.inject']],
   ['KN-1', 'Legal reference desk', 'Facing outward', 'advises', 'Staff only', 'L1', 'Answers what the law says with a citation or declines. Has no read access to any client data, by construction.', ['library.search', 'cite']]
 ].map(([code, name, group, kind, gate, tier, does, tools], i) => {
-  const modes = ['live', 'live', 'live', 'live', 'live', 'suggest', 'live', 'suggest', 'live', 'live', 'live', 'suggest', 'live', 'suggest', 'suggest', 'shadow', 'shadow', 'suggest', 'live', 'live', 'live', 'live', 'live', 'live', 'suggest', 'live', 'live'];
+  const modes = ['live', 'live', 'live', 'live', 'live', 'suggest', 'live', 'suggest', 'live', 'live', 'live', 'suggest', 'live', 'suggest', 'suggest', 'shadow', 'shadow', 'suggest', 'live', 'live', 'live', 'live', 'live', 'suggest', 'live', 'live'];
   const s = (i * 37) % 11;
   return {
     code, short: ROUTINE_NAMES[code] || code, name, group, kind, gate, tier, does, tools, mode: modes[i],
@@ -151,8 +147,8 @@ const GATES = {
   G4: { n: 'Credit position from the mismatch report', who: 'Manager · partner above ₹50,000', cap: 'review', capHigh: 'g3_high', why: 'No credit call is taken before the mismatch report is read.' },
   G5: { n: 'Hand-typed journal above the set value', who: 'A second staff member', cap: 'g5', fourEyes: true, why: 'Manual entries are where errors and frauds hide.' },
   G6: { n: 'Four-eyes review', who: 'Reviewer who did not prepare it', cap: 'review', fourEyes: true, why: 'Whoever prepared it cannot be the only reviewer.' },
-  G7: { n: 'The signature', who: 'Partner — enters the DSC PIN', cap: 'sign', partner: true, why: 'Held in memory for seconds, never stored. Nothing automated can reach it.' },
-  G8: { n: 'UDIN generation', who: 'Partner — human-started', cap: 'udin', partner: true, why: 'ICAI requires the member to generate it personally.' },
+  G7: { n: 'Partner sign-off', who: 'Partner', cap: 'sign', partner: true, why: 'The partner personally approves a return before it is filed.' },
+  G8: { n: 'Audit report release', who: 'Partner', cap: 'release', partner: true, why: 'A signed report leaves the firm only on the signing partner\'s say-so.' },
   G9: { n: 'The bill is read first', who: 'Partner', cap: 'bill', partner: true, why: 'Nothing reaches a client until a partner has read it.' },
   G10: { n: 'A client question off the closed list', who: 'Named staff member', cap: 'g10', why: 'Questions that look factual are often interpretive. Refusal to improvise is the default.' },
   G11: { n: 'Reply to a tax authority', who: 'Partner, always', cap: 'notice', partner: true, why: 'Every word to an officer is written by the professional whose name is on it.' },
@@ -167,14 +163,14 @@ const GATES = {
 
 /* Approval queue — items waiting at gates */
 const GATE_ITEMS = [
-  { id: 'q01', checks: '38/38 rules · 2 notes', gate: 'G7', title: 'Sign GSTR-3B · Sep 2026', client: 'c11', amount: 3842600, prep: 'lavanya', rev: 'farhan', created: D(-1, 18, 20), due: D(0, 17), ev: ['Liability ₹38,42,600 · cash ₹11,06,200 · ITC ₹27,36,400', 'All 38 rules passed · 0 blocking, 2 warnings explained', 'Variance vs Aug +6.2% — new Cipla contract (narrative attached)', 'Four-eyes review by Farhan Qureshi at 18:02 yesterday'] },
-  { id: 'q02', checks: 'FVU passed · 3/3 challans', gate: 'G7', title: 'Sign TDS return 26Q · Q2 FY 2026-27', client: 'c01', amount: 412300, prep: 'rohit', rev: 'divya', created: D(-1, 16), due: D(4, 17), ev: ['148 deductee rows · FVU 9.1 validation passed', '3 PAN-inoperative payees at 20% (206AA) — flagged and confirmed', 'Challans matched: 3 of 3 (CIN captured)', 'Reviewed by Divya Reddy'] },
+  { id: 'q01', checks: '38/38 rules · 2 notes', gate: 'G7', title: 'Sign off GSTR-3B · Sep 2026', client: 'c11', amount: 3842600, prep: 'lavanya', rev: 'farhan', created: D(-1, 18, 20), due: D(0, 17), ev: ['Liability ₹38,42,600 · cash ₹11,06,200 · ITC ₹27,36,400', 'All 38 rules passed · 0 blocking, 2 warnings explained', 'Variance vs Aug +6.2% — new Cipla contract (narrative attached)', 'Four-eyes review by Farhan Qureshi at 18:02 yesterday'] },
+  { id: 'q02', checks: 'FVU passed · 3/3 challans', gate: 'G7', title: 'Sign off TDS return 26Q · Q2 FY 2026-27', client: 'c01', amount: 412300, prep: 'rohit', rev: 'divya', created: D(-1, 16), due: D(4, 17), ev: ['148 deductee rows · FVU 9.1 validation passed', '3 PAN-inoperative payees at 20% (206AA) — flagged and confirmed', 'Challans matched: 3 of 3 (CIN captured)', 'Reviewed by Divya Reddy'] },
   { id: 'q03', checks: '37 proposals · 2 above ₹50k', gate: 'G3', title: 'Commit IMS decisions · 37 invoices', client: 'c01', amount: 684210, prep: 'GS-2', created: D(0, 8, 5), due: D(1, 18), ev: ['31 accept · 4 hold · 2 reject proposed', 'Rejections: SLP-26-27-0488 (duplicate of 0471), Sai Tooling (goods not received)', 'Two items above ₹50,000 → partner required', 'Client proposed 6 accepts on the portal (recorded as client action)'] },
   { id: 'q04', checks: '4 differences sized', gate: 'G4', title: 'Credit position · Kesarla Sep 2026 — ₹1,84,300 at risk', client: 'c01', amount: 184300, prep: 'GS-3', created: D(0, 7, 40), due: D(1, 12), ev: ['Books ITC ₹21,46,900 vs 2B ₹19,62,600', 'Sai Tooling Works has not filed GSTR-1 (₹96,400)', 'Swiggy staff meals — blocked u/s 17(5) (₹4,180)', 'Rule 37: two suppliers unpaid > 180 days (₹83,720 reversal)'] },
   { id: 'q05', checks: '1 value below 0.85', gate: 'G2', title: 'Confirm values · WhatsApp photo IMG-20260912-WA0014', client: 'c01', amount: 47200, prep: 'IN-1', created: D(0, 9, 12), due: D(0, 18), ev: ['Confidence 0.71 on invoice total (thumb over the figure)', 'Read: ₹47,200 · alternative reading ₹41,200', 'Supplier GSTIN read with confidence 0.96'] },
   { id: 'q06', checks: 'Date ambiguous', gate: 'G2', title: 'Confirm values · thermal scan Scan 20-Sep-2026 11-47', client: 'c01', amount: 8610, prep: 'IN-1', created: D(0, 9, 14), due: D(0, 18), ev: ['Faded thermal print — confidence 0.64 on date', 'Period ambiguity: 20-Sep or 28-Sep', 'Amount ₹8,610 confidence 0.91'] },
-  { id: 'q07', checks: 'AIS 4/4 explained', gate: 'G6', title: 'Review ITR-3 · Dr Harini Vemulapati', client: 'c03', amount: 0, prep: 'divya', created: D(-2, 15), due: D(3, 17), ev: ['DT-2 cleared: AIS differences 4 of 4 explained', 'Regime comparison: old regime saves ₹38,400', 'Tax audit u/s 44AB attached (UDIN pending)'] },
-  { id: 'q08', gate: 'G8', title: 'Generate UDIN · Tax audit 3CB-3CD — Charminar Textiles', client: 'c06', amount: 0, prep: 'meera', created: D(-1, 11), due: D(5, 17), ev: ['Report signed 29-Sep (ceiling count recorded on that date)', 'UDIN must be generated within 60 days of signing'] },
+  { id: 'q07', checks: 'AIS 4/4 explained', gate: 'G6', title: 'Review ITR-3 · Dr Harini Vemulapati', client: 'c03', amount: 0, prep: 'divya', created: D(-2, 15), due: D(3, 17), ev: ['DT-2 cleared: AIS differences 4 of 4 explained', 'Regime comparison: old regime saves ₹38,400', 'Tax audit u/s 44AB report attached'] },
+  { id: 'q08', gate: 'G8', title: 'Release report · Tax audit 3CB-3CD — Charminar Textiles', client: 'c06', amount: 0, prep: 'meera', created: D(-1, 11), due: D(5, 17), ev: ['Report signed 29-Sep (ceiling count recorded on that date)', 'Report goes to the client once the partner releases it'] },
   { id: 'q09', checks: '142 work lines', gate: 'G9', title: 'Approve invoice · Vizag Marine — Q2 retainer + LUT + RoDTEP', client: 'c08', amount: 371700, prep: 'FO-3', created: D(0, 7), due: D(2, 17), ev: ['Retainer Q2 ₹2,70,000 · LUT renewal ₹15,000 · RoDTEP claims ₹30,000 · GST 18%', 'Narrative drafted from 142 ledger lines of work', 'Effort 168 h vs fee — margin 34%'] },
   { id: 'q10', checks: '₹5.91 L of ₹6.82 L explained', gate: 'G11', title: 'Reply to ASMT-10 · Kesarla FY 2024-25 — ₹6,82,450', client: 'c01', amount: 682450, prep: 'CL-2', created: D(-3, 10), due: D(6, 17), ev: ['Scrutiny: ITC in 3B exceeds 2A by ₹6,82,450', 'Reply due in 9 days · internal buffer date in 4 working days', 'GS-6 difference log explains ₹5,91,300 — residual ₹91,150'] },
   { id: 'q11', checks: 'KYC 4/4 · AML clear', gate: 'G13', title: 'Accept new client · Rayalaseema Solar Pvt Ltd', client: null, newClient: 'Rayalaseema Solar Pvt Ltd', amount: 480000, prep: 'sushma', created: D(-1, 12), due: D(3, 17), ev: ['KYC: PAN, CIN, directors verified · DigiLocker pull complete', 'AML screen: 0 hits · PEP: none', 'Conflict check: competitor of no existing client', 'Previous auditor NOC requested (Sec 140 communication)'] },
@@ -182,7 +178,7 @@ const GATE_ITEMS = [
   { id: 'q13', checks: 'Residual ₹0', gate: 'G15', title: 'Certify GSTR-9C · Deccan Pharma FY 2025-26', client: 'c11', amount: 0, prep: 'GS-6', created: D(-2, 14), due: D(20, 17), ev: ['Turnover per books ₹48.6 cr vs declared ₹48.42 cr — ₹18.1 L explained (credit notes post-Sep)', 'Unexplained residual ₹0', 'Difference log entries: 64 across 12 months'] },
   { id: 'q14', checks: '3-way check ✓', gate: 'G17', title: 'Release PF ECR & ESI · Kesarla — Oct payroll', client: 'c01', amount: 286540, prep: 'anil', created: D(0, 10), due: D(4, 15), ev: ['142 employees · 3 joiners · 1 leaver', 'Three-way check: books = ECR = TDS salary ✔', 'Arrears for 4 employees itemised'] },
   { id: 'q15', checks: 'No support attached', gate: 'G5', title: 'Second approval · Journal JV/0912 — ₹6,20,000 provision', client: 'c18', amount: 620000, prep: 'rohit', created: D(0, 11), due: D(1, 17), ev: ['Hand-typed: provision for liquidated damages', 'No supporting document attached yet', 'Above the ₹2,00,000 manual-entry threshold'] },
-  { id: 'q16', gate: 'G12', title: 'Send GSTR-3B acknowledgement · Godavari Agro', client: 'c04', amount: 0, prep: 'FL-1', created: D(0, 8), due: D(0, 18), ev: ['ARN AA3709260887312 captured', 'Document: ack PDF (not sensitive) · channel WhatsApp'] },
+  { id: 'q16', gate: 'G12', title: 'Send GSTR-3B acknowledgement · Godavari Agro', client: 'c04', amount: 0, prep: 'lavanya', created: D(0, 8), due: D(0, 18), ev: ['Acknowledgement AA3709260887312 recorded', 'Document: ack PDF (not sensitive) · channel WhatsApp'] },
   { id: 'q17', gate: 'G16', title: 'Share audited financials with HDFC Bank · Kakatiya', client: 'c18', amount: 0, prep: 'karthik', created: D(-1, 16), due: D(2, 17), ev: ['Request: annual renewal of CC limit ₹12 cr', 'Client consent on file (email 21-Oct)', 'Will go as expiring watermarked link (7 days)'] },
   { id: 'q18', gate: 'G10', title: 'Routed question · "Ye invoice ka ITC milega kya?" — Dr Harini', client: 'c03', amount: 0, prep: 'CL-1', created: D(0, 9, 40), due: D(0, 18), ev: ['Off the closed list: eligibility is interpretive', 'Routed to Divya Reddy with client file attached'] },
   { id: 'q19', gate: 'G1', title: 'Silent client · Kakatiya — 3 chases, no papers for Oct', client: 'c18', amount: 0, prep: 'IN-2', created: D(0, 7, 30), due: D(1, 12), ev: ['Ladder: day −3, day −1, overdue — no response', 'Internal cut-off in 2 days for GSTR-1', 'Partner decides: call personally, keep chasing, or pause'] },
@@ -193,16 +189,8 @@ const GATE_ITEMS = [
 /* ---------- connectors ---------- */
 /* Status reflects what is actually built today (Phase 0 audit, Nov 2026):
    'Live' = working end to end · 'Partial' = some of the scope works · 'File import' = upload/download works, no live link
-   'Simulated' = sandbox responses only · 'Not built' · 'By design: …' = a person files, by policy. */
+   'Not built'. */
 const CONNECTORS = [
-  ['GSTN via GSP', 'Government', 'api', 'Simulated', 'Sandbox responses only — no GSP credentials or live calls yet'],
-  ['Income-tax e-filing (ERI)', 'Government', 'api', 'Not built', 'ITR upload, AIS/TIS/26AS, pre-fill, e-verify'],
-  ['e-Invoice IRP', 'Government', 'api', 'Not built', 'IRN generation & 30-day watch'],
-  ['e-Way bill', 'Government', 'api', 'Not built', 'EWB generation & reconciliation'],
-  ['TRACES / TIN-NSDL', 'Government', 'file', 'Not built', 'FVU validation, Form 16/16A download, defaults'],
-  ['MCA V3', 'Government', 'pack', 'By design: human files', 'Schema-validated packs only — no automation'],
-  ['EPFO · ESIC', 'Government', 'pack', 'By design: human files', 'ECR & challan files for upload'],
-  ['ICAI UDIN portal', 'Professional', 'pack', 'By design: human-started', 'UDIN recorded back against the report'],
   ['Tally Prime (desktop)', 'Accounting', 'file', 'File import', 'Trial balance XML import and purchase-voucher XML export work · live desktop bridge not built'],
   ['Winman', 'Accounting', 'file', 'Not built', 'Client master / return status exchange — integration route still to be decided'],
   ['Zoho Books', 'Accounting', 'api', 'Not built', 'OAuth · journals, bills, invoices'],
@@ -215,11 +203,8 @@ const CONNECTORS = [
   ['Client portal & app', 'Client channels', 'api', 'Not built', 'Portal screens are a demo; no backend behind them yet'],
   ['SMS (DLT registered)', 'Client channels', 'api', 'Partial', 'Sign-in OTP via Fast2SMS / Twilio · reminders not built'],
   ['DigiLocker', 'Identity', 'api', 'Not built', 'KYC pulls with consent'],
-  ['DSC / desktop signer', 'Identity', 'api', 'Partial', 'Backend certificate + revocation checks built · desktop signer app and this screen not wired'],
   ['Razorpay / UPI', 'Payments', 'api', 'Not built', 'Fee collection links & reconciliation'],
   ['Google Drive / SharePoint', 'Storage', 'api', 'Not built', 'Legacy archive import (read-only)'],
-  ['DGFT · ICEGATE', 'Government', 'pack', 'By design: human files', 'IEC, RoDTEP, shipping-bill data'],
-  ['RBI FIRMS', 'Government', 'pack', 'By design: human files', 'FC-GPR / FC-TRS packs']
 ].map(([name, cat, mode, status, scope], i) => ({ id: 'cx' + i, name, cat, mode, status, scope, sync: '—', quota: '—', on: ['Live', 'Partial', 'File import'].includes(status) }));
 
 /* ---------- rulebook ---------- */
@@ -256,7 +241,7 @@ const CLOSED_LIST = ['Is it filed?', 'What is outstanding?', 'When is the next d
 const THREADS = [
   { id: 't1', client: 'c01', channel: 'WhatsApp', lang: 'Telugu-English', unread: 1, msgs: [
     { at: D(0, 8, 41), from: 'in', text: 'Sir, September GST file chesara? Ack pampandi please.' },
-    { at: D(0, 8, 41), from: 'agent', intent: 'Is it filed? + Send my acknowledgement', text: 'Avunu andi ✅ GSTR-3B Sep 2026 filed on 20-Oct · ARN AA360926112874K. Acknowledgement PDF is ready — our team will send it in a moment.' },
+    { at: D(0, 8, 41), from: 'agent', intent: 'Is it filed? + Send my acknowledgement', text: 'Avunu andi ✅ GSTR-3B Sep 2026 filed on 20-Oct · acknowledgement number AA360926112874K. Acknowledgement PDF is ready — our team will send it in a moment.' },
     { at: D(0, 8, 43), from: 'route', text: 'Document send needs a person (G12) → queued for Lavanya' },
     { at: D(0, 9, 2), from: 'in', text: 'Inka Sai Tooling bill ki credit vastunda?' },
     { at: D(0, 9, 2), from: 'route', text: 'Off the closed list (eligibility) → routed to Farhan Qureshi with file' }
@@ -298,10 +283,10 @@ const AUTOMATIONS = [
   { id: 'a4', name: 'IMS action nudge', agent: 'GS-2', trigger: '12th of month · invoices awaiting client confirmation', ladder: ['"9 invoices proposed accept, 3 need your confirmation"'], channel: 'WhatsApp · App', gate: null, on: true, sent: 302, resp: 71, cat: 'Collect' },
   { id: 'a5', name: 'Tax payable intimation — GST · TDS · PF/ESI', agent: 'GS-5', trigger: 'After the liability is computed and reviewed (G6) — GST by the 18th, TDS by the 5th, PF/ESI by the 12th', ladder: ['Amount + challan / UPI link + due date', 'Reminder 1 day before', 'Payment detected → thank-you'], channel: 'WhatsApp · Email', gate: 'G6', on: true, sent: 486, resp: 93, cat: 'Pay' },
   { id: 'a6', name: 'Advance tax intimation', agent: 'DT-3', trigger: '10 days before 15 Jun / Sep / Dec / Mar', ladder: ['Estimate + assumptions', 'Client may challenge assumptions', 'Final amount after G4'], channel: 'Email · App', gate: 'G4', on: true, sent: 188, resp: 66, cat: 'Pay' },
-  { id: 'a7', name: 'Filing confirmation', agent: 'FL-1', trigger: 'Acknowledgement captured from the portal', ladder: ['Text confirmation with ARN — automatic', 'Ack PDF — one click to send (G12)'], channel: 'Same channel', gate: 'G12', on: true, sent: 2210, resp: 0, cat: 'Inform' },
+  { id: 'a7', name: 'Filing confirmation', agent: 'CL-1', trigger: 'A person records the acknowledgement number', ladder: ['Text confirmation with the acknowledgement number', 'Ack PDF — one click to send (G12)'], channel: 'Same channel', gate: 'G12', on: true, sent: 2210, resp: 0, cat: 'Inform' },
   { id: 'a8', name: 'Due-date digest', agent: 'CL-1', trigger: 'Every Monday 08:00', ladder: ['This week\'s due dates + what we still need'], channel: 'WhatsApp · Email', gate: null, on: true, sent: 1040, resp: 22, cat: 'Inform' },
   { id: 'a9', name: 'Fee invoice & payment reminders', agent: 'FO-3', trigger: 'Invoice approved at G9', ladder: ['Invoice + UPI link', 'Day 15 reminder', 'Day 30 reminder', 'Day 90 → partner personally'], channel: 'Email · WhatsApp', gate: 'G9', on: true, sent: 612, resp: 58, cat: 'Pay' },
-  { id: 'a10', name: 'DSC & registration expiry alerts', agent: 'FO-2', trigger: '30 / 7 days before DSC, LUT, FSSAI, IEC expiry', ladder: ['Alert with renewal checklist', 'Book a slot'], channel: 'WhatsApp · Email', gate: null, on: true, sent: 96, resp: 81, cat: 'Inform' },
+  { id: 'a10', name: 'Registration expiry alerts', agent: 'FO-2', trigger: '30 / 7 days before LUT, FSSAI, IEC expiry', ladder: ['Alert with renewal checklist', 'Book a slot'], channel: 'WhatsApp · Email', gate: null, on: true, sent: 96, resp: 81, cat: 'Inform' },
   { id: 'a11', name: 'Supplier chase letters', agent: 'GS-4', trigger: 'Credit stuck with a non-filing supplier > ₹10,000', ladder: ['Draft letter to client for approval', 'Client approves → sent in client\'s name'], channel: 'Email', gate: 'G12', on: true, sent: 74, resp: 61, cat: 'Collect' },
   { id: 'a12', name: 'Notice received — client alert', agent: 'CL-2', trigger: 'Notice extracted and partner alerted', ladder: ['Partner-approved holding message only'], channel: 'Phone call + WhatsApp', gate: 'G11', on: true, sent: 31, resp: 100, cat: 'Inform' },
   { id: 'a13', name: 'ITR season organiser', agent: 'IN-2', trigger: '1 June · individual clients', ladder: ['Personalised checklist from last year\'s return', 'AIS preview', 'Book review call'], channel: 'WhatsApp · Email · App', gate: null, on: true, sent: 412, resp: 88, cat: 'Collect' },
@@ -325,10 +310,10 @@ const TEMPLATES = {
     'தமிழ்': 'வணக்கம் {name}, {period}க்கான உங்கள் GST செலுத்த வேண்டியது {amount} (பணம்). {date}க்கு முன் இந்த சலான் மூலம் செலுத்தவும்: {link}. பயன்படுத்திய கிரெடிட்: {itc}. கேள்விகள் இருந்தால் பதில் அனுப்பவும் — {owner} உங்களை அழைப்பார்.'
   },
   a7: {
-    English: '✅ Filed: {form} for {period}. Acknowledgement {arn}, filed {date}. Your ack PDF will follow from {owner}.',
-    'हिन्दी': '✅ फाइल हो गया: {period} का {form}। पावती संख्या {arn}, दिनांक {date}। पावती PDF {owner} भेजेंगे।',
-    'తెలుగు': '✅ ఫైల్ అయింది: {period} {form}. అక్నాలెడ్జ్‌మెంట్ {arn}, తేదీ {date}. Ack PDF ను {owner} పంపుతారు.',
-    'தமிழ்': '✅ தாக்கல் செய்யப்பட்டது: {period} {form}. ஒப்புகை எண் {arn}, தேதி {date}. ஒப்புகை PDF ஐ {owner} அனுப்புவார்.'
+    English: '✅ Filed: {form} for {period}. Acknowledgement {ack}, filed {date}. Your ack PDF will follow from {owner}.',
+    'हिन्दी': '✅ फाइल हो गया: {period} का {form}। पावती संख्या {ack}, दिनांक {date}। पावती PDF {owner} भेजेंगे।',
+    'తెలుగు': '✅ ఫైల్ అయింది: {period} {form}. అక్నాలెడ్జ్‌మెంట్ {ack}, తేదీ {date}. Ack PDF ను {owner} పంపుతారు.',
+    'தமிழ்': '✅ தாக்கல் செய்யப்பட்டது: {period} {form}. ஒப்புகை எண் {ack}, தேதி {date}. ஒப்புகை PDF ஐ {owner} அனுப்புவார்.'
   }
 };
 
@@ -416,31 +401,6 @@ const INVOICES = [
   { no: 'NC/26-27/0408', client: 'c05', amt: 212400, status: 'Sent', date: D(-18), age: 18 }
 ];
 
-/* ---------- DSC & credentials ---------- */
-const DSCS = [
-  { holder: 'K. Raghava', client: 'c01', cls: 'Class 3 · sign', expiry: D(19), custody: 'Office safe · drawer 3', token: 'ePass 2003', out: null },
-  { holder: 'Dr P. Venkatesh', client: 'c11', cls: 'Class 3 · sign + encrypt', expiry: D(142), custody: 'Client holds', token: 'ProxKey', out: null },
-  { holder: 'S. Appala Raju', client: 'c08', cls: 'Class 3 · DGFT', expiry: D(6), custody: 'Out with Karthik (DGFT filing)', token: 'Watchdata', out: 'karthik' },
-  { holder: 'M. Sudhakar', client: 'c12', cls: 'Class 3 · sign', expiry: D(301), custody: 'Office safe · drawer 1', token: 'ePass 2003', out: null },
-  { holder: 'B. Narsimha Reddy', client: 'c18', cls: 'Class 3 · sign', expiry: D(-4), custody: 'Office safe · drawer 3', token: 'ePass 2003', out: null },
-  { holder: 'P. Satyanarayana', client: 'c04', cls: 'Class 3 · sign', expiry: D(77), custody: 'Office safe · drawer 2', token: 'Hypersecu', out: null },
-  { holder: 'Neha Kulkarni', client: 'c05', cls: 'Class 3 · sign', expiry: D(212), custody: 'Client holds', token: 'ProxKey', out: null },
-  { holder: 'CA Srinivas Nallamala', client: null, cls: 'Class 3 · sign (firm)', expiry: D(388), custody: 'Partner personal', token: 'ePass 2003', out: null },
-  { holder: 'CA Meera Iyer', client: null, cls: 'Class 3 · sign (firm)', expiry: D(27), custody: 'Partner personal', token: 'ePass 2003', out: null }
-];
-const CREDS = [
-  { client: 'c01', portal: 'GST portal', user: 'kesarla_gst', rotated: D(-41), mfa: 'OTP to director', reveals: 3 },
-  { client: 'c01', portal: 'Income-tax e-filing', user: 'AAJCK4417M', rotated: D(-88), mfa: 'OTP to director', reveals: 1 },
-  { client: 'c01', portal: 'TRACES', user: 'HYDK04417E', rotated: D(-120), mfa: '—', reveals: 2 },
-  { client: 'c01', portal: 'EPFO establishment', user: 'APHYD0041172', rotated: D(-200), mfa: 'OTP to HR', reveals: 4 },
-  { client: 'c04', portal: 'GST portal', user: 'godavari_agro', rotated: D(-12), mfa: 'OTP to partner', reveals: 0 },
-  { client: 'c08', portal: 'DGFT', user: 'vizagmarine', rotated: D(-63), mfa: 'DSC', reveals: 1 },
-  { client: 'c11', portal: 'MCA V3', user: 'deccanpharma.cs', rotated: D(-31), mfa: 'OTP to CS', reveals: 2 },
-  { client: 'c12', portal: 'Telangana RERA', user: 'sahasra_rera', rotated: D(-190), mfa: '—', reveals: 0 },
-  { client: 'c14', portal: 'RBI FIRMS', user: 'zenith.india', rotated: D(-45), mfa: 'OTP to CFO', reveals: 1 },
-  { client: 'c18', portal: 'GST portal', user: 'kakatiya_cons', rotated: D(-366), mfa: '—', reveals: 6 }
-];
-
 /* ---------- quality (FO-5) ---------- */
 const QUALITY = [
   { who: 'farhan', reviewed: 212, canaries: 6, caught: 6 },
@@ -465,7 +425,7 @@ const LEAVES = [
 ];
 const INWARD = [
   { at: D(0, 9, 30), dir: 'In', what: 'Original lease deed + 3 rent receipts', client: 'c24', by: 'imran', where: 'Rack B · file 24/2026' },
-  { at: D(0, 11, 0), dir: 'Out', what: 'DSC token — S. Appala Raju', client: 'c08', by: 'imran', where: 'Handed to Karthik' },
+  { at: D(0, 11, 0), dir: 'Out', what: 'Signed engagement letter — original', client: 'c08', by: 'imran', where: 'Handed to Karthik' },
   { at: D(-1, 15, 10), dir: 'In', what: 'Courier — ASMT-10 hard copy', client: 'c01', by: 'imran', where: 'Scanned → vault, original to partner' },
   { at: D(-1, 17, 40), dir: 'Out', what: 'Signed audit report (2 copies)', client: 'c20', by: 'imran', where: 'Courier DTDC · AWB 7741902215' }
 ];

@@ -138,7 +138,7 @@ def build_checklist_docx():
         [
             "Client Master & Directory",
             "[X] Built",
-            "Client & ClientGSTIN relational schema, full CRUD APIs in backend/app/api/v1/clients.py, reactive frontend in src/app/clients/page.tsx with multi-state GSTIN mapping and audit tags.",
+            "Client & ClientGSTIN relational schema, full CRUD APIs in backend/app/api/v1/clients.py, client list and profile in the Firm OS web app with multi-state GSTIN mapping and audit tags.",
             "Client data sync verified."
         ],
         [
@@ -180,7 +180,7 @@ def build_checklist_docx():
         [
             "Board & List Filing Views",
             "[X] Built",
-            "6-stage visual pipeline ('The Line') spanning Documents Pending -> Intake & OCR -> Reconciliation -> Review -> Signing -> Filed & Acknowledged in dashboard and returns modules.",
+            "6-stage visual pipeline ('The Line') spanning Documents Pending -> Intake & OCR -> Reconciliation -> Review -> Partner Approval -> Filed & Acknowledged in dashboard and returns modules.",
             "Stage transitions live."
         ],
         [
@@ -188,12 +188,6 @@ def build_checklist_docx():
             "[X] Built",
             "Deterministic 18-gate human governance system (G1-G18) with strict Partner-vs-Preparer separation enforced in human_gates/fsm.py.",
             "Gate reviews mandatory."
-        ],
-        [
-            "Partner DSC Signing Gate & UDIN",
-            "[/] Partial",
-            "G7 signing gate ready with PKCS#11 SHA-256 document hashing; automated UDIN portal API handshake pending direct ICAI portal connector.",
-            "Hook live DSC token."
         ],
         [
             "Notice Desk & Reply Deadlines",
@@ -208,12 +202,6 @@ def build_checklist_docx():
     doc.add_heading("3. Automation & GST Compliance Engine", level=1)
     gst_rows = [
         [
-            "Live GST Portal Sync (GSP)",
-            "[X] Built",
-            "Enterprise GSP client in gsp/client.py and portal_sync.py with exponential backoff, circuit breaking, GSTN OAuth session cache, and simulated live sandbox fallback.",
-            "Switch to production GSP credentials."
-        ],
-        [
             "6-Pass GSTR-2B / IMS Reconciler",
             "[X] Built",
             "High-speed 6-pass reconciliation engine (Exact -> Doc Pattern -> Approximate -> Range -> Multi-bill -> Inverted) with IMS commit status tracking and Sec 17(5) blocked credit reversals.",
@@ -224,12 +212,6 @@ def build_checklist_docx():
             "[X] Built",
             "ocr_engine.py with RapidOCR + pdfplumber extracting invoice tables, HSN codes, tax breakdowns, and vendor GSTINs with confidence scoring.",
             "OCR pipeline active."
-        ],
-        [
-            "GST Return Assembly & Filing",
-            "[X] Built",
-            "Deterministic filings_engine.py generating official GSTR-3B and GSTR-1 JSON payloads, GSP filing submission, and cryptographically verified ARN acknowledgment receipts.",
-            "ARN generation tested."
         ],
         [
             "38 Return Verification Rules",
@@ -316,12 +298,6 @@ def build_checklist_docx():
             "Storage vault live."
         ],
         [
-            "DSC Expiry Tracking & Alerts",
-            "[/] Partial",
-            "DSC validity and serial fields stored on partner/client records; automated 30-day proactive expiry notifications in development.",
-            "Add email alert trigger."
-        ],
-        [
             "Automated Payment Chasers",
             "[/] Partial",
             "Overdue aging badges in place; automated WhatsApp/Email dunning sequence scheduled for build.",
@@ -397,7 +373,7 @@ def build_checklist_docx():
             "Client Self-Service Portal",
             "[/] Partial",
             "Backend client portal authentication routes and document access endpoints created; dedicated client view in development.",
-            "Build client frontend view."
+            "Build the client portal view in the Firm OS web app."
         ],
         [
             "WhatsApp Compliance Reminders",
@@ -416,12 +392,6 @@ def build_checklist_docx():
             "[/] Partial",
             "Template localization structure drafted for Hindi, Gujarati, Marathi, and Tamil client notifications.",
             "Populate message strings."
-        ],
-        [
-            "Client Portal Document E-Sign",
-            "[/] Partial",
-            "Firm internal DSC signing gate complete; Aadhaar OTP eSign for client authorization in architecture phase.",
-            "Integrate Aadhaar eSign."
         ],
         [
             "Native Client Mobile App",
@@ -492,7 +462,7 @@ def build_checklist_docx():
         [
             "Vercel Production Deployment",
             "[X] Built",
-            "Multi-environment deployment active on Vercel (ca-agentic-platform-9w56.vercel.app) with Next.js 15 SSR and ISR rendering.",
+            "Firm OS web app (firm_os_web/) served by the FastAPI backend and deployable to Vercel as a static site.",
             "Ready (State: Success)."
         ],
         [
@@ -506,12 +476,6 @@ def build_checklist_docx():
             "[X] Built",
             "Comprehensive automated test suite in backend/tests/ passing all 46 test cases covering math, FSM, SQC-1 audit, and API contracts.",
             "46/46 Passed in 3.3s."
-        ],
-        [
-            "Next.js 15 Clean CI Compilation",
-            "[X] Built",
-            "All 11 static & dynamic routes compile cleanly with zero TypeScript errors and zero font-fetch dependencies.",
-            "Clean build verified."
         ]
     ]
     create_styled_table(doc, headers, infra_rows, widths, hex_header="1B365D")

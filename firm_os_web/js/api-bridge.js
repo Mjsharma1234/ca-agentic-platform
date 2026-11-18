@@ -82,8 +82,8 @@ const API_CLIENT = {
   },
   // STATE keys that are records (above), per-browser preferences, or derived: never part of settings.
   NOT_SETTINGS: ['obligations', 'tasks', 'notices', 'invoices', 'timesheets', 'newClients', 'extraTeam', 'ledger',
-    'persona', 'theme', 'session', 'seededFor', 'lastSeen', 'seenGates', 'autopilot', 'ledgerTrimmed'],
-  ARRAY_SETTINGS: ['gates', 'docs', 'threads', 'dscs', 'reveals', 'leaves', 'expenses', 'notes', 'feed', 'firmDeadlines', 'ruleLog'],
+    'persona', 'theme', 'session', 'seededFor', 'lastSeen', 'seenGates', 'ledgerTrimmed'],
+  ARRAY_SETTINGS: ['gates', 'docs', 'threads', 'leaves', 'expenses', 'notes', 'feed', 'firmDeadlines', 'ruleLog'],
   MAP_SETTINGS: ['walls', 'caps', 'connectors', 'automations', 'agentModes', 'ims', 'patterns', 'bank', 'recon', 'portalDone', 'payments', 'daySignedOff'],
   STAFF_DEFAULTS: { focus: '', status: 'In office', cost: 0, color: '#4A4E63', signed: 0, ceilingOther: 0, cpe: 0 },
 
@@ -123,6 +123,7 @@ const API_CLIENT = {
     this.MAP_SETTINGS.forEach(k => { STATE[k] = {}; });
     this.ARRAY_SETTINGS.forEach(k => { STATE[k] = []; });
     Object.assign(STATE, settings, keep);
+    ['dscs', 'reveals', 'autopilot'].forEach(k => { delete STATE[k]; });
     const selfClient = ALL_CLIENTS.find(c => c.id === 'self');
     ALL_CLIENTS.length = 0; ws.clients.forEach(c => ALL_CLIENTS.push(c)); if (selfClient) ALL_CLIENTS.push(selfClient);
     STATE.newClients = [];
@@ -292,76 +293,6 @@ const API_CLIENT = {
     if (message) this.toast(message, 'warn', 'lock');
   },
 
-  async decideGate(gateCode, itemId, action, notes = '') {
-    const actor = (typeof me === 'function' && me()) ? me() : { id: 'srinivas', role: 'PT' };
-    const gateItem = (STATE.gates || []).find(g => g.id === itemId) || {};
-    
-    const payload = {
-      item_id: itemId,
-      gate_code: gateCode,
-      action: action.toUpperCase(),
-      notes: notes,
-      actor_id: actor.id,
-      actor_role: actor.role,
-      preparer_id: gateItem.prep || null,
-      amount: gateItem.amount || 0.0
-    };
-
-    try {
-      const resp = await fetch(`${API_BASE}/firm-os/gates/${gateCode}/decide`, {
-        method: 'POST',
-        headers: this.getHeaders(),
-        body: JSON.stringify(payload)
-      });
-
-      if (!resp.ok) {
-        const err = await resp.json();
-        throw new Error(err.detail || 'Gate decision failed');
-      }
-
-      const res = await resp.json();
-      console.log('[API-Bridge] Gate approved & logged to Audit Ledger:', res);
-      return res;
-    } catch (err) {
-      console.error('[API-Bridge] Gate approval error:', err);
-      throw err;
-    }
-  },
-
-  async signDSC(itemId, pin) {
-    const actor = (typeof me === 'function' && me()) ? me() : { id: 'srinivas', role: 'PT' };
-    const payload = {
-      item_id: itemId,
-      partner_id: actor.id,
-      pin: pin
-    };
-
-    const resp = await fetch(`${API_BASE}/firm-os/dsc/sign`, {
-      method: 'POST',
-      headers: this.getHeaders(),
-      body: JSON.stringify(payload)
-    });
-
-    if (!resp.ok) {
-      const err = await resp.json();
-      throw new Error(err.detail || 'DSC signing failed');
-    }
-    return await resp.json();
-  },
-
-  async runReconciliation(clientId = 'c01', period = '2026-09') {
-    const resp = await fetch(`${API_BASE}/firm-os/reconciliation/run`, {
-      method: 'POST',
-      headers: this.getHeaders(),
-      body: JSON.stringify({ client_id: clientId, period: period })
-    });
-
-    if (!resp.ok) {
-      throw new Error('Deterministic reconciliation failed on backend');
-    }
-    return await resp.json();
-  },
-
   exportTallyXmlUrl() {
     return `${API_BASE}/firm-os/export/tally-xml`;
   },
@@ -386,48 +317,6 @@ const API_CLIENT = {
     } catch (e) {
       console.warn('[API-Bridge] Audit chain verification failed:', e);
     }
-  },
-
-  async generateGSTR1(supplierGstin, period, invoices = null) {
-    const resp = await fetch(`${API_BASE}/firm-os/filings/gstr1/generate`, {
-      method: 'POST',
-      headers: this.getHeaders(),
-      body: JSON.stringify({ supplier_gstin: supplierGstin, return_period: period, invoices: invoices })
-    });
-    if (!resp.ok) throw new Error('GSTR-1 JSON Generation failed');
-    return await resp.json();
-  },
-
-  async computeGSTR3B(payload) {
-    const resp = await fetch(`${API_BASE}/firm-os/filings/gstr3b/compute`, {
-      method: 'POST',
-      headers: this.getHeaders(),
-      body: JSON.stringify(payload)
-    });
-    if (!resp.ok) throw new Error('GSTR-3B Computation failed');
-    return await resp.json();
-  },
-
-  async submitFiling(returnType, gstin, period, pin = '1234') {
-    const actor = (typeof me === 'function' && me()) ? me() : { id: 'srinivas', role: 'PT' };
-    const resp = await fetch(`${API_BASE}/firm-os/filings/submit`, {
-      method: 'POST',
-      headers: this.getHeaders(),
-      body: JSON.stringify({
-        return_type: returnType,
-        gstin: gstin,
-        period: period,
-        pin: pin,
-        partner_id: actor.id
-      })
-    });
-    if (!resp.ok) {
-      const err = await resp.json();
-      throw new Error(err.detail || 'Filing submission failed');
-    }
-    const data = await resp.json();
-    this.toast(`Filing Submitted to GSTN · ARN: ${data.arn}`, 'success', 'check-circle');
-    return data;
   },
 
   async createEmployee(payload) {
@@ -458,18 +347,6 @@ const API_CLIENT = {
     return null;
   },
 
-  async syncPortalLive(gstins = null) {
-    const resp = await fetch(`${API_BASE}/firm-os/portal/sync-live`, {
-      method: 'POST',
-      headers: this.getHeaders(),
-      body: JSON.stringify({ period: '2026-09', gstins: gstins })
-    });
-    if (!resp.ok) throw new Error('Portal sync failed');
-    const data = await resp.json();
-    this.toast('Live Portal Sync: Refreshed 14 client files with latest GSTR-2B', 'success', 'refresh-cw');
-    return data;
-  },
-
   async fetchLiveStatutoryCalendar() {
     try {
       const resp = await fetch(`${API_BASE}/firm-os/statutory-calendar/live`, { headers: this.getHeaders() });
@@ -485,8 +362,7 @@ const API_CLIENT = {
       const resp = await fetch(`${API_BASE}/firm-os/statutory-calendar/sync`, { method: 'POST', headers: this.getHeaders() });
       if (resp.ok) {
         const data = await resp.json();
-        const gstnStatus = data.portals && data.portals.gstn && data.portals.gstn.online ? 'GSTN Online' : 'Active';
-        this.toast(`Live Sync: ${data.total_deadlines_tracked} statutory dates verified (${gstnStatus})`, 'success', 'globe');
+        this.toast(`Statutory calendar refreshed: ${data.total_deadlines_tracked} dates verified`, 'success', 'calendar');
         return data;
       }
     } catch (e) {

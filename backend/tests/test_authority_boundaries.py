@@ -62,7 +62,7 @@ def test_all_agents_have_confidence_threshold():
 def test_all_agents_declare_gates():
     """High-risk statutory agents (Return Assembly GS-5) must declare human verification gates G6 and G7."""
     assert "G6" in GS05_Manifest.gates, "Return Assembly agent missing G6 four-eyes review gate"
-    assert "G7" in GS05_Manifest.gates, "Return Assembly agent missing G7 partner DSC signing gate"
+    assert "G7" in GS05_Manifest.gates, "Return Assembly agent missing G7 partner approval gate"
     assert "G3" in GS02_Manifest.gates, "IMS agent missing G3 approval gate"
     assert "G4" in GS03_Manifest.gates, "ITC matching agent missing G4 approval gate"
 

@@ -33,8 +33,8 @@ connection: superuser, `BYPASSRLS`, table ownership, a login role that merely `S
   The setting is transaction-local, re-applied by an `after_begin` hook to each new transaction, and can never leak to the next request on a pooled connection.
 * Every table has a `tenant_isolation` policy (`tenant_id = app_tenant_id()`, for reads **and** writes). A query with a forgotten `WHERE tenant_id = …` returns only the caller's rows, and
   inserting or moving a row into another tenant fails. **No context ⇒ zero rows.**
-* The pre-login flows (OTP login, Firebase login, device grant) must find a user or device before any tenant is known. They use `get_system_db`, which sets `app.system = on`.
-  That opens only `firms`, `users`, `otp_records`, `device_authorizations` and `signer_devices`; business data stays closed. The endpoint calls `enter_tenant()` the moment it has identified the caller.
+* The pre-login flows (OTP login, Firebase login) must find a user before any tenant is known. They use `get_system_db`, which sets `app.system = on`.
+  That opens only `firms`, `users` and `otp_records`; business data stays closed. The endpoint calls `enter_tenant()` the moment it has identified the caller.
 * `audit_ledger` and `audit_blocks` are append-only: `ca_app` has no UPDATE/DELETE, and triggers block UPDATE, DELETE and TRUNCATE even for the owner.
 * `ca_app` cannot alter schema, disable RLS, or read `alembic_version`.
 
@@ -45,7 +45,7 @@ connection: superuser, `BYPASSRLS`, table ownership, a login role that merely `S
 
 * Every index leads with the tenant column (RLS adds `tenant_id = X` to every plan), `(SELECT app_tenant_id())` is evaluated once per statement, and live-row reads use partial indexes (`is_deleted = false`, `revoked_at IS NULL`).
 * BRIN indexes on the append-only audit tables (≈1000× smaller than a B-tree; serves time-range scans).
-* Aggressive autovacuum on churn-heavy tables (`otp_records`, `signer_devices`, `device_authorizations`, `firm_states`).
+* Aggressive autovacuum on churn-heavy tables (`otp_records`, `firm_states`).
 * Pool: `DB_POOL_SIZE` + `DB_MAX_OVERFLOW` per worker, `pool_pre_ping`, recycle every 30 min. Size so workers × (pool + overflow) stays below the server's `max_connections`, or put PgBouncer (transaction mode) in front: tenant settings are transaction-local, so it is safe.
 * Guard rails per API session: `statement_timeout` 30 s, `lock_timeout` 10 s, `idle_in_transaction_session_timeout` 60 s, `application_name=ca-platform` for `pg_stat_activity`.
 
@@ -56,8 +56,7 @@ TEST_POSTGRES_URL=postgresql://postgres:pw@localhost:5432/ca_test TEST_POSTGRES_
 ```
 
 ⚠️ This **wipes the `public` schema** of that database. It covers: RLS on every table, tenant isolation for read/insert/update/delete, no-context-no-rows,
-system scope limits, append-only audit (owner and app), the unprivileged role, index plans, and an end-to-end run of the real API (OTP login for two firms, client isolation,
-and the DPoP-bound desktop-signer grant) against RLS.
+system scope limits, append-only audit (owner and app), the unprivileged role, index plans, and an end-to-end run of the real API (OTP login for two firms and client isolation) against RLS.
 
 ## 5. Operations
 

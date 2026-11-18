@@ -1,19 +1,17 @@
 import hashlib
 import json
-import os
 import re
 import uuid
-from datetime import datetime, date
-from typing import Dict, Any, Optional, List
+from datetime import datetime
+from typing import Dict, Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, Body, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
-from sqlalchemy import select, update
+from sqlalchemy import select
 
-from ...core.config import settings
 from ...core.database import get_db
 from ...api.deps import get_optional_current_user, get_current_user, User, ROLE_HIERARCHY
-from ...models.firm_os import FirmStateModel, ObligationItem, NoticeItem, DaybookEntry, GateApprovalLog
+from ...models.firm_os import FirmStateModel, GateApprovalLog
 from ...models.audit_ledger import AuditLedger, ActionType
 from ...deterministic_core.reconciler import reconcile_books_with_gstr2b
 from ...deterministic_core.tally_bridge import generate_tally_purchase_xml
@@ -34,12 +32,6 @@ class GateDecisionRequest(BaseModel):
     actor_role: str = "PT"
     preparer_id: Optional[str] = None
     amount: Optional[float] = 0.0
-
-class DSCSigningRequest(BaseModel):
-    item_id: str
-    partner_id: str = "srinivas"
-    pin: str
-    document_hash: Optional[str] = None
 
 class StateSyncRequest(BaseModel):
     state: Dict[str, Any]
@@ -192,87 +184,6 @@ def decide_gate(
         "four_eyes_verified": True
     }
 
-@router.post("/dsc/sign")
-def execute_dsc_signature(
-    req: DSCSigningRequest,
-    db: Session = Depends(get_db),
-    current_user: Optional[User] = Depends(get_optional_current_user)
-):
-    """
-    Gate G7: Partner Class-3 DSC USB Token Signing Ceremony.
-    Simulates hardware cryptographic signature token generation with immediate memory wipe of PIN.
-    Enforces CA Partner privilege check and audit validation.
-    """
-    is_prod = os.getenv("ENVIRONMENT", "").lower() == "production" or not settings.DEBUG
-    user_is_auth = current_user and isinstance(current_user, User)
-    if is_prod:
-        # A DSC PIN must never be typed into, or transit through, the platform. Production
-        # signing happens on the partner's desktop signer via /api/v1/signing/requests.
-        raise HTTPException(
-            status_code=410,
-            detail="Server-side DSC signing is disabled. Use the desktop signer (POST /api/v1/signing/requests)."
-        )
-
-    if user_is_auth:
-        user_role = (current_user.role or "").upper()
-        role_level = ROLE_HIERARCHY.get(user_role, 0)
-        if user_role not in ["PARTNER", "PT", "MP"] and role_level < ROLE_HIERARCHY["PARTNER"]:
-            raise HTTPException(
-                status_code=403,
-                detail=f"DSC signing ceremony strictly restricted to Chartered Accountant Partners. Your role: {current_user.role}"
-            )
-        signer_id = str(current_user.id)
-    else:
-        signer_id = req.partner_id
-
-    if len(req.pin) < 6:
-        raise HTTPException(status_code=400, detail="Invalid DSC PIN: Must be at least 6 alphanumeric characters.")
-        
-    doc_hash = req.document_hash or sha256_hash({"item": req.item_id, "timestamp": datetime.utcnow().isoformat()})
-    
-    # Generate PKCS#7 detached signature simulation
-    signature_payload = {
-        "signer": signer_id,
-        "cert_serial": "IN-CC3-2026-9812-CA",
-        "issuer": "eMudhra Sub-CA Class 3",
-        "signed_hash": doc_hash,
-        "signing_time": datetime.utcnow().isoformat() + "Z",
-        "algorithm": "SHA256withRSA"
-    }
-    sig_token = f"PKCS7-{hashlib.sha256(json.dumps(signature_payload).encode()).hexdigest()[:32].upper()}"
-    
-    # Hardened memory wipe of PIN
-    pin_len = len(req.pin)
-    req.pin = "\x00" * pin_len
-    del req.pin
-    
-    # Audit log entry
-    audit = AuditLedger(
-        tenant_id=uuid.UUID("00000000-0000-0000-0000-000000000001"),
-        client_id=uuid.UUID("11111111-1111-1111-1111-111111111111"),
-        agent_id="GATE-G7",
-        agent_version="v1.0",
-        action_type=ActionType.SIGNED,
-        entity_type="RETURN_SIGNATURE",
-        entity_id=uuid.uuid4(),
-        input_hash=doc_hash,
-        output_hash=sig_token,
-        output_snapshot=signature_payload,
-        actor_role="PT",
-        gate_id="G7"
-    )
-    db.add(audit)
-    
-    db.commit()
-    return {
-        "status": "signed",
-        "signature_token": sig_token,
-        "signed_by": req.partner_id,
-        "cert_serial": "IN-CC3-2026-9812-CA",
-        "timestamp": datetime.utcnow().isoformat(),
-        "pin_memory_wiped": True
-    }
-
 @router.post("/reconciliation/run")
 def run_reconciliation(
     client_id: str = Body(default="c01"),
@@ -352,40 +263,11 @@ def get_audit_trail(db: Session = Depends(get_db)):
     return {"count": len(trail), "trail": trail}
 
 # =====================================================================
-# ENTERPRISE EXTENSIONS: Cryptographic Chain, Automated Filings, & CSV
+# ENTERPRISE EXTENSIONS: Cryptographic Chain & CSV
 # =====================================================================
 
 from ...deterministic_core.audit_chain import append_audit_block, verify_firm_audit_chain
-from ...deterministic_core.filings_engine import (
-    generate_gstr1_payload,
-    compute_gstr3b_liability,
-    simulate_gsp_filing_submission,
-    validate_gstin_format
-)
 from ...models.tenant import Firm
-
-class GSTR1GenerateRequest(BaseModel):
-    supplier_gstin: str = "36AAACN1234F1Z5"
-    return_period: str = "092026"
-    invoices: Optional[List[Dict[str, Any]]] = None
-
-class GSTR3BComputeRequest(BaseModel):
-    outward_taxable: float = 3842600.0
-    outward_igst: float = 245000.0
-    outward_cgst: float = 223417.0
-    outward_sgst: float = 223417.0
-    eligible_itc_igst: float = 180000.0
-    eligible_itc_cgst: float = 195000.0
-    eligible_itc_sgst: float = 195000.0
-    ineligible_itc: float = 12500.0
-    days_delayed: int = 0
-
-class FilingSubmitRequest(BaseModel):
-    return_type: str = "GSTR-3B"
-    gstin: str = "36AAACN1234F1Z5"
-    period: str = "092026"
-    pin: str = "1234"
-    partner_id: str = "srinivas"
 
 @router.get("/audit-chain/verify")
 def verify_audit_chain_endpoint(db: Session = Depends(get_db)):
@@ -395,91 +277,6 @@ def verify_audit_chain_endpoint(db: Session = Depends(get_db)):
     firm = db.execute(select(Firm).where(Firm.firm_code == DEFAULT_FIRM_ID)).scalar_one_or_none()
     firm_id = firm.id if firm else uuid.UUID("00000000-0000-0000-0000-000000000001")
     return verify_firm_audit_chain(db, firm_id)
-
-@router.post("/filings/gstr1/generate")
-def generate_gstr1_endpoint(req: GSTR1GenerateRequest):
-    """Generates official GSTN-compliant GSTR-1 JSON package from sales invoices."""
-    invoices = req.invoices or [
-        {
-            "invoice_number": "INV-2026-001",
-            "invoice_date": "14-09-2026",
-            "customer_gstin": "36AABCB2212R1Z8",
-            "pos": "36",
-            "taxable_value": 450000.0,
-            "tax_rate": 18.0,
-            "hsn_code": "998311"
-        },
-        {
-            "invoice_number": "INV-2026-002",
-            "invoice_date": "22-09-2026",
-            "customer_gstin": "29AAACV5514E1Z3",
-            "pos": "29",
-            "taxable_value": 780000.0,
-            "tax_rate": 18.0,
-            "hsn_code": "998312"
-        }
-    ]
-    try:
-        return generate_gstr1_payload(req.supplier_gstin, req.return_period, invoices)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-@router.post("/filings/gstr3b/compute")
-def compute_gstr3b_endpoint(req: GSTR3BComputeRequest):
-    """Computes Table 3.1 liabilities, Table 4 ITC set-off, and Section 50 statutory interest."""
-    return compute_gstr3b_liability(
-        outward_taxable=req.outward_taxable,
-        outward_igst=req.outward_igst,
-        outward_cgst=req.outward_cgst,
-        outward_sgst=req.outward_sgst,
-        eligible_itc_igst=req.eligible_itc_igst,
-        eligible_itc_cgst=req.eligible_itc_cgst,
-        eligible_itc_sgst=req.eligible_itc_sgst,
-        ineligible_itc=req.ineligible_itc,
-        days_delayed=req.days_delayed
-    )
-
-@router.post("/filings/submit")
-def submit_statutory_filing(req: FilingSubmitRequest, db: Session = Depends(get_db)):
-    """Simulates GSTN GSP API submission gateway with Partner DSC cryptographic sign-off.
-    Issues Application Reference Number (ARN) and logs immutable audit block.
-    """
-    if req.pin != "1234" and len(req.pin) < 4:
-        raise HTTPException(status_code=401, detail="Invalid DSC token hardware PIN")
-
-    # Generate cryptographic token signature
-    dsc_signature = hashlib.sha256(f"DSC|{req.partner_id}|{req.gstin}|{req.period}|{datetime.utcnow().isoformat()}".encode()).hexdigest()
-    
-    # Process through filing gateway
-    filing_res = simulate_gsp_filing_submission(
-        return_type=req.return_type,
-        gstin=req.gstin,
-        period=req.period,
-        dsc_signature=dsc_signature,
-        partner_id=req.partner_id
-    )
-
-    # Append to cryptographic audit chain
-    firm = db.execute(select(Firm).where(Firm.firm_code == DEFAULT_FIRM_ID)).scalar_one_or_none()
-    firm_id = firm.id if firm else uuid.UUID("00000000-0000-0000-0000-000000000001")
-    append_audit_block(
-        db=db,
-        firm_id=firm_id,
-        actor_id=req.partner_id,
-        actor_role="PT",
-        action="GOVERNMENT_PORTAL_FILING_RELEASED",
-        entity_type="STATUTORY_RETURN",
-        entity_id=filing_res["arn"],
-        payload={
-            "arn": filing_res["arn"],
-            "return_type": req.return_type,
-            "gstin": req.gstin,
-            "period": req.period,
-            "dsc_hash": dsc_signature
-        }
-    )
-
-    return filing_res
 
 @router.get("/export/reconciliation-csv")
 def export_reconciliation_csv():
@@ -523,7 +320,7 @@ def get_client_portal_summary(client_code: str):
         "current_period": "September 2026",
         "filings": [
             {"form": "GSTR-1", "due_date": "2026-10-11", "status": "Draft Prepared", "action_required": "Review & Consent"},
-            {"form": "GSTR-3B", "due_date": "2026-10-20", "status": "Ready for Signing", "action_required": "None (CA Signing with DSC)"},
+            {"form": "GSTR-3B", "due_date": "2026-10-20", "status": "Ready for Partner Approval", "action_required": "None"},
             {"form": "TDS 26Q", "due_date": "2026-10-31", "status": "Challan Reconciled", "action_required": "None"}
         ],
         "active_notices": [
@@ -539,7 +336,7 @@ def get_client_portal_summary(client_code: str):
     }
 
 # =====================================================================
-# TEAM CREDENTIAL MANAGEMENT & LIVE GST FILING/INTERNAL OPS TRACKER
+# TEAM CREDENTIAL MANAGEMENT & INTERNAL OPS TRACKER
 # =====================================================================
 
 class CreateEmployeeRequest(BaseModel):
@@ -552,10 +349,6 @@ class CreateEmployeeRequest(BaseModel):
     stipend_or_cost: Optional[float] = 12000.0
     partner_id: str = "srinivas"
     partner_role: str = "PT"
-
-class PortalSyncRequest(BaseModel):
-    period: str = "2026-09"
-    gstins: Optional[List[str]] = None
 
 @router.post("/team/members")
 def create_employee_id(
@@ -690,8 +483,8 @@ def get_live_tracker_telemetry(db: Session = Depends(get_db)):
             "stage_2_intake_ocr": {"count": 3, "percentage": 21.4, "status": "Voucher OCR & Validation Running"},
             "stage_3_reconciliation_cleared": {"count": 4, "percentage": 28.6, "status": "Rule 88D Variance < 1%"},
             "stage_4_manager_reviewed_g6": {"count": 2, "percentage": 14.3, "status": "Four-Eyes Sign-Off Passed"},
-            "stage_5_partner_dsc_signed_g7": {"count": 2, "percentage": 14.3, "status": "PKCS#7 Certificate Hash Attached"},
-            "stage_6_filed_and_acknowledged": {"count": 1, "percentage": 7.1, "status": "ARN Issued by GSTN"}
+            "stage_5_partner_approved_g7": {"count": 2, "percentage": 14.3, "status": "Partner Approval Recorded"},
+            "stage_6_filed_and_acknowledged": {"count": 1, "percentage": 7.1, "status": "ARN Recorded by Firm"}
         },
         "live_filing_stream": [
             {
@@ -699,7 +492,7 @@ def get_live_tracker_telemetry(db: Session = Depends(get_db)):
                 "client": "Zenith Infotech Solutions Pvt Ltd",
                 "gstin": "36AAACN1234F1Z5",
                 "action": "GSTR-3B Table 4 Eligible ITC computed at ₹5,70,000",
-                "status": "Ready for G7 Partner DSC Signing",
+                "status": "Ready for G7 Partner Approval",
                 "badge": "accent-agent"
             },
             {
@@ -723,39 +516,6 @@ def get_live_tracker_telemetry(db: Session = Depends(get_db)):
             "four_eyes_pass_rate": "100%",
             "rule_88d_exposure": "₹42,500 (1 client)",
             "partner_audit_ceiling_safe": True
-        }
-    }
-
-@router.post("/portal/sync-live")
-def trigger_portal_live_sync(req: PortalSyncRequest):
-    """Initiates live simulated handshake with GSTN and TRACES GSP endpoints.
-    Pulls down latest counter-party GSTR-2B filing feeds and auto-updates reconciliation status.
-    """
-    from ...gsp.portal_sync import PortalSyncEngine
-    from ...gsp.client import GSPClient
-
-    engine = PortalSyncEngine(client=GSPClient())
-    gstin_list = req.gstins or ["27AAACR1234F1Z5", "27BBBCM5678G1Z2"]
-    sync_result = engine.check_all_filing_statuses(gstin_list, "GSTR-3B", req.period)
-    
-    # Also fetch live sample 2B for the primary client
-    invoices_2b = engine.sync_client_gstr2b(gstin_list[0], req.period)
-    ims_state = engine.sync_ims_dashboard(gstin_list[0], req.period)
-
-    now = datetime.utcnow()
-    return {
-        "status": "PORTAL_SYNC_COMPLETED",
-        "sync_time": now.isoformat(),
-        "period": req.period,
-        "gsp_gateway": "Adaequare GST Suvidha Provider (Production Sandbox)",
-        "handshake_latency_ms": 342,
-        "gstins_polled": len(gstin_list),
-        "filing_statuses": sync_result,
-        "ims_dashboard": ims_state,
-        "updates_detected": {
-            "new_vendor_invoices_in_2b": len(invoices_2b),
-            "itc_available_delta": sum(x.get("total_tax", 0.0) for x in invoices_2b),
-            "status_transition": f"All {len(gstin_list)} client work files refreshed with latest 2B feeds."
         }
     }
 

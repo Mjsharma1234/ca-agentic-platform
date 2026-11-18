@@ -32,23 +32,8 @@ gcloud run deploy ca-backend \
 BACKEND_URL=$(gcloud run services describe ca-backend --region $REGION --format 'value(status.url)')
 echo "Backend deployed at: $BACKEND_URL"
 
-# 3. Deploy Frontend UI to Cloud Run
-echo "Deploying Frontend UI (Next.js 15)..."
-gcloud run deploy ca-frontend \
-  --source ./frontend \
-  --region $REGION \
-  --platform managed \
-  --allow-unauthenticated \
-  --memory 1Gi \
-  --cpu 1 \
-  --min-instances 0 \
-  --max-instances 10 \
-  --set-env-vars "NEXT_PUBLIC_API_URL=$BACKEND_URL"
-
-FRONTEND_URL=$(gcloud run services describe ca-frontend --region $REGION --format 'value(status.url)')
-
 echo "================================================================================"
 echo "✅ CA Firm OS Successfully Deployed on GCP Cloud Run!"
-echo "👉 Live Web App URL: $FRONTEND_URL"
+echo "👉 Live Web App URL (Firm OS): $BACKEND_URL"
 echo "👉 Live Backend Swagger Docs: $BACKEND_URL/docs"
 echo "================================================================================"

@@ -2,8 +2,7 @@
 
 Law 1: the machine prepares, a person decides. Every decision is authorised against the
 gate's required role, enforces maker-checker (four-eyes) where a preparer is known, and is
-sealed into the firm's SQC-1 audit chain. G7 can only be approved once the desktop signer
-has produced a verified signature for the exact return under review.
+sealed into the firm's SQC-1 audit chain.
 """
 import uuid
 from datetime import datetime, timezone
@@ -19,7 +18,6 @@ from ...deterministic_core.audit_chain import append_audit_block
 from ...models.clients import Client
 from ...models.gates import GateDecision, GateStatus, GateTier, RequiredRole
 from ...models.returns import GSTReturn, ReturnStatus
-from ...models.signing import SigningRequest, SigningStatus
 from ..deps import ROLE_HIERARCHY, User, get_current_user, require_role
 
 router = APIRouter(prefix="/gates", tags=["gates"])
@@ -203,20 +201,6 @@ def approve_gate(decision_id: str, user: Viewer, body: DecisionBody = DecisionBo
     g = _load(db, decision_id, user)
     ret = _guard_decision(db, g, user, require_reason=False, notes=body.notes)
 
-    if g.gate_id == "G7":
-        signed = db.execute(
-            select(SigningRequest).where(
-                SigningRequest.tenant_id == user.tenant_id,
-                SigningRequest.entity_type == g.entity_type,
-                SigningRequest.entity_id == str(g.entity_id),
-                SigningRequest.status == SigningStatus.SIGNED,
-            )
-        ).scalars().first()
-        if signed is None:
-            raise HTTPException(
-                status_code=409,
-                detail="Gate G7 cannot be approved without a verified desktop-signer signature. Start a signing request first.",
-            )
     if g.gate_id == "G6" and ret is not None:
         ret.reviewer_id = user.id
         ret.status = ReturnStatus.REVIEWED

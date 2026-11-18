@@ -6,29 +6,19 @@ from datetime import datetime
 from app.core.database import create_tables, SessionLocal
 from app.models.tenant import Firm, User, AuditBlock, FirmConstitution, PlanTier, UserRole
 from app.deterministic_core.audit_chain import append_audit_block, verify_firm_audit_chain, compute_block_hash
-from app.deterministic_core.filings_engine import (
-    generate_gstr1_payload,
-    compute_gstr3b_liability,
-    simulate_gsp_filing_submission,
-    validate_gstin_format
-)
 from app.api.v1.firm_os import (
     get_firm_state,
     sync_firm_state,
     decide_gate,
-    execute_dsc_signature,
     export_reconciliation_csv,
     get_client_portal_summary,
     create_employee_id,
     list_employee_members,
     get_live_tracker_telemetry,
-    trigger_portal_live_sync,
     get_live_statutory_calendar,
     sync_live_statutory_calendar,
     CreateEmployeeRequest,
-    PortalSyncRequest,
     GateDecisionRequest,
-    DSCSigningRequest,
     StateSyncRequest
 )
 from fastapi import HTTPException
@@ -139,86 +129,6 @@ def test_cryptographic_audit_chain_tamper_detection(db_session):
     assert report["tamper_detected"] is True
     assert "Content tampering detected" in report["error"]
 
-def test_gstr1_payload_generator_compliance():
-    supplier_gstin = "36AAACN1234F1Z5"
-    period = "092026"
-    invoices = [
-        {
-            "invoice_number": "INV-101",
-            "invoice_date": "10-09-2026",
-            "customer_gstin": "36AABCB2212R1Z8", # Intra-state Telangana (36)
-            "pos": "36",
-            "taxable_value": 100000.0,
-            "tax_rate": 18.0,
-            "hsn_code": "998311"
-        },
-        {
-            "invoice_number": "INV-102",
-            "invoice_date": "15-09-2026",
-            "customer_gstin": "29AAACV5514E1Z3", # Inter-state Karnataka (29)
-            "pos": "29",
-            "taxable_value": 200000.0,
-            "tax_rate": 18.0,
-            "hsn_code": "998312"
-        },
-        {
-            "invoice_number": "INV-103",
-            "invoice_date": "20-09-2026",
-            "customer_gstin": None, # B2C Small
-            "pos": "36",
-            "taxable_value": 50000.0,
-            "tax_rate": 18.0,
-            "hsn_code": "998311"
-        }
-    ]
-
-    res = generate_gstr1_payload(supplier_gstin, period, invoices)
-    assert res["status"] == "VALID"
-    summary = res["summary"]
-    assert summary["invoice_count"] == 3
-    assert summary["b2b_buyers"] == 2
-    assert summary["total_taxable"] == 350000.0
-    # IGST: 200000 * 18% = 36000
-    assert summary["total_igst"] == 36000.0
-    # CGST & SGST: (100000 + 50000) * 9% = 13500 each
-    assert summary["total_cgst"] == 13500.0
-    assert summary["total_sgst"] == 13500.0
-    assert len(res["payload_hash"]) == 64
-
-def test_gstr3b_liability_and_sec50_interest_computation():
-    comp = compute_gstr3b_liability(
-        outward_taxable=1000000.0,
-        outward_igst=50000.0,
-        outward_cgst=65000.0,
-        outward_sgst=65000.0,
-        eligible_itc_igst=30000.0,
-        eligible_itc_cgst=40000.0,
-        eligible_itc_sgst=40000.0,
-        ineligible_itc=5000.0,
-        days_delayed=30 # 30 days delay -> Sec 50 interest applies
-    )
-    assert comp["status"] == "COMPUTED"
-    # Net cash payable: (50k-30k) + (65k-40k) + (65k-40k) = 20k + 25k + 25k = 70,000
-    assert comp["cash_tax_payable"]["total_cash"] == 70000.0
-    # Section 50 interest: 70000 * 18% * 30 / 365 = 1035.62 -> ₹1036
-    penalties = comp["statutory_penalties"]
-    assert penalties["section_50_interest"] > 1000.0
-    assert penalties["late_fee_cgst"] == 25 * 30
-    assert penalties["late_fee_sgst"] == 25 * 30
-
-def test_gsp_filing_simulator_with_arn():
-    res = simulate_gsp_filing_submission(
-        return_type="GSTR-3B",
-        gstin="36AAACN1234F1Z5",
-        period="092026",
-        dsc_signature="a1b2c3d4e5f6...",
-        partner_id="srinivas"
-    )
-    assert res["status"] == "FILED_SUCCESSFULLY"
-    assert res["arn"].startswith("SIM36")
-    assert len(res["arn"]) >= 15
-    assert len(res["receipt_sha256"]) == 64
-
 def test_csv_reconciliation_export():
     csv_resp = export_reconciliation_csv()
     content = csv_resp.body.decode()
@@ -274,7 +184,7 @@ def test_employee_creation_non_partner_rejection(db_session):
         create_employee_id(unauthorized_req, db_session, _firm_user(db_session, "ARTICLE_TRAINEE"))
     assert exc_info.value.status_code == 403
 
-def test_live_tracker_telemetry_and_portal_sync(db_session):
+def test_live_tracker_telemetry(db_session):
     # Check live tracker
     telemetry = get_live_tracker_telemetry(db_session)
     assert telemetry["status"] == "LIVE_TELEMETRY"
@@ -283,12 +193,6 @@ def test_live_tracker_telemetry_and_portal_sync(db_session):
     assert "gstr3b" in telemetry["statutory_clock"]
     assert len(telemetry["live_filing_stream"]) >= 3
     assert "stage_6_filed_and_acknowledged" in telemetry["pipeline_stages"]
-
-    # Trigger live portal sync handshake
-    sync_res = trigger_portal_live_sync(PortalSyncRequest(period="2026-09"))
-    assert sync_res["status"] == "PORTAL_SYNC_COMPLETED"
-    assert sync_res["handshake_latency_ms"] > 0
-    assert sync_res["updates_detected"]["new_vendor_invoices_in_2b"] > 0
 
 def test_live_statutory_calendar_deadlines_and_buffers():
     cal = get_live_statutory_calendar()

@@ -18,7 +18,7 @@ class PlanTier(str, Enum):
     ENTERPRISE = "ENTERPRISE"  # Large Firm / Multi-branch (Unlimited)
 
 class UserRole(str, Enum):
-    PARTNER = "PARTNER"                # Full sign-off, DSC authority, G12/G14 releases
+    PARTNER = "PARTNER"                # Full sign-off, G12/G14 releases
     SENIOR_MANAGER = "SENIOR_MANAGER"  # Work review, high-value check, G6-G10 approvals
     MANAGER = "MANAGER"                # Routine work review, allocation
     ARTICLE_TRAINEE = "ARTICLE_TRAINEE"# Preparation, data entry, initial reconciliation
