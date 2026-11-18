@@ -10,9 +10,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 
-# Next.js build
-.next/
-out/
+# Build output
 build/
 dist/
 public/

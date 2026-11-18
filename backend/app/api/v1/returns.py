@@ -1,5 +1,4 @@
 import uuid
-from datetime import datetime, timezone
 from typing import Annotated, Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -7,10 +6,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ...core.database import get_db
-from ...deterministic_core.audit_chain import append_audit_block
 from ...models.clients import Client
-from ...models.returns import GSTReturn, ReturnStatus
-from ...models.signing import SigningRequest, SigningStatus
+from ...models.returns import GSTReturn
 from ..deps import User, require_role
 
 router = APIRouter(prefix="/returns", tags=["returns"])
@@ -135,7 +132,7 @@ def get_live_reconciliation(
     period: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
-    """Books (the client's inward invoices) vs the GSTR-2B feed pulled through the GSP layer."""
+    """Books (the client's inward invoices) vs the GSTR-2B feed (none is imported yet, so every book invoice shows as unmatched)."""
     from ...deterministic_core.reconciler import reconcile_books_with_gstr2b
 
     client, invoices = _tenant_invoices(db, user, client_id)
@@ -149,9 +146,7 @@ def get_live_reconciliation(
         }
         for i in invoices
     ]
-    feeds = []
-    if client is not None and client.gstin:
-        feeds = _sync_engine().sync_client_gstr2b(client.gstin, period or datetime.now(timezone.utc).strftime("%Y-%m"))
+    feeds: list = []
     return _to_ui_contract(reconcile_books_with_gstr2b(books, feeds))
 
 
@@ -208,166 +203,4 @@ def get_evidence_pack(return_id: str, user: Viewer, db: Session = Depends(get_db
         "rule_check_results": rules,
         "four_eyes_verified": r.reviewer_id is not None and r.reviewer_id != r.preparer_id,
         "variance_memo": r.variance_memo,
-    }
-
-
-@router.post("/{return_id}/sign")
-def sign_return(return_id: str):
-    """Signing never happens server-side: a DSC PIN must not reach the platform."""
-    raise HTTPException(
-        status_code=410,
-        detail="Server-side signing is disabled. Open a request with POST /api/v1/signing/requests and sign on the desktop signer.",
-    )
-
-
-# =============================================================================
-# GSP / GSTN Portal Integration Endpoints
-# Added: Production-grade GSP layer via PortalSyncEngine
-# =============================================================================
-
-from ...gsp.portal_sync import PortalSyncEngine
-from ...gsp.client import GSPClient
-from pydantic import BaseModel as _BaseModel
-from typing import List as _List, Optional as _Optional
-
-class _FileReturnRequest(_BaseModel):
-    """Only the target is client-supplied. The payload and signature come from the database."""
-    pass
-
-
-def _sync_engine() -> PortalSyncEngine:
-    """Dependency factory — creates a PortalSyncEngine per request."""
-    return PortalSyncEngine(client=GSPClient())
-
-
-def _assert_own_gstin(db: Session, user: User, gstin: str) -> None:
-    """The GSP credentials belong to the firm: only GSTINs of its own live clients may be queried."""
-    own = db.execute(
-        select(Client.id).where(Client.tenant_id == user.tenant_id, Client.is_deleted.is_(False), Client.gstin == gstin.upper())
-    ).first()
-    if own is None:
-        raise HTTPException(status_code=404, detail="GSTIN is not registered to a client of this firm.")
-
-
-@router.get("/gstr2b/{gstin}/{period}", tags=["gsp"])
-def get_gstr2b(gstin: str, period: str, user: Viewer, db: Session = Depends(get_db)):
-    """
-    Pull live GSTR-2B inward supply invoices from the GSP portal for the
-    given GSTIN and return period.
-
-    Returns a flat list of normalised invoice objects ready for reconciliation.
-    Period format: YYYY-MM (e.g. 2026-10) or MMYYYY (e.g. 102026).
-    """
-    _assert_own_gstin(db, user, gstin)
-    engine = _sync_engine()
-    invoices = engine.sync_client_gstr2b(gstin, period)
-    return {
-        "status": "success",
-        "gstin": gstin,
-        "period": period,
-        "invoice_count": len(invoices),
-        "invoices": invoices,
-    }
-
-
-@router.get("/ims/{gstin}/{period}", tags=["gsp"])
-def get_ims_dashboard(gstin: str, period: str, user: Viewer, db: Session = Depends(get_db)):
-    """
-    Fetch the IMS (Invoice Management System) inward invoice dashboard for
-    a GSTIN and period.
-
-    Returns accepted/pending/rejected invoice counts and ITC impact figures.
-    """
-    _assert_own_gstin(db, user, gstin)
-    engine = _sync_engine()
-    data = engine.sync_ims_dashboard(gstin, period)
-    return {"status": "success", "gstin": gstin, "period": period, "ims": data}
-
-
-@router.post("/{return_id}/file", tags=["gsp"])
-def file_return(
-    return_id: str,
-    user: Annotated[User, Depends(require_role("PARTNER"))],
-    db: Session = Depends(get_db),
-):
-    """
-    Submit a SIGNED return through the GSP gateway (Gates G8/G9).
-
-    The stored payload and the verified desktop-signer signature are used; nothing signature- or
-    payload-related is accepted from the caller. The return must carry a SIGNED signing request
-    whose document hash equals the stored payload hash.
-    """
-    ret = _load(db, return_id, user)
-    if ret.status != ReturnStatus.SIGNED:
-        raise HTTPException(status_code=409, detail=f"Return is {ret.status.value}; only SIGNED returns can be filed.")
-    signed = db.execute(
-        select(SigningRequest).where(
-            SigningRequest.tenant_id == user.tenant_id,
-            SigningRequest.entity_type == "GST_RETURN",
-            SigningRequest.entity_id == str(ret.id),
-            SigningRequest.document_hash == ret.payload_hash,
-            SigningRequest.status == SigningStatus.SIGNED,
-        ).order_by(SigningRequest.signed_at.desc())
-    ).scalars().first()
-    if signed is None or not ret.payload_json:
-        raise HTTPException(status_code=409, detail="No verified signature matches this return's payload.")
-
-    engine = _sync_engine()
-    result = engine.file_return(
-        gstin=ret.gstin,
-        period=ret.period,
-        return_type=ret.return_type.value,
-        payload_json=ret.payload_json,
-        dsc_signature=signed.signature_b64 or "",
-        partner_id=str(signed.signer_id),
-    )
-
-    if result.success:
-        ret.status = ReturnStatus.FILED
-        ret.arn = result.arn
-        ret.filed_at = datetime.now(timezone.utc)
-        db.commit()
-        append_audit_block(
-            db, user.tenant_id, str(user.id), user.role, "RETURN_FILED", "GST_RETURN", str(ret.id),
-            {"arn": result.arn, "signing_request": str(signed.id)},
-        )
-        return {
-            "status": "FILED",
-            "return_id": str(ret.id),
-            "arn": result.arn,
-            "submitted_at": result.submitted_at,
-            "partner_id": result.partner_id,
-            "return_type": result.return_type,
-            "gstin": result.gstin,
-            "period": result.period,
-        }
-
-    raise HTTPException(
-        status_code=502,
-        detail={
-            "error": "GSP_SUBMISSION_FAILED",
-            "error_code": result.error_code,
-            "message": result.error_message,
-        },
-    )
-
-
-@router.get("/filing-status/{gstin}/{return_type}/{period}", tags=["gsp"])
-def get_filing_status(gstin: str, return_type: str, period: str, user: Viewer, db: Session = Depends(get_db)):
-    """
-    Check whether a specific GST return has been filed on the GSTN portal.
-
-    Pass a single GSTIN in the path.  For bulk checking use the
-    POST /returns/filing-status-bulk endpoint.
-    """
-    _assert_own_gstin(db, user, gstin)
-    engine = _sync_engine()
-    statuses = engine.check_all_filing_statuses([gstin], return_type, period)
-    info = statuses.get(gstin, {})
-    return {
-        "status": "success",
-        "gstin": gstin,
-        "return_type": return_type,
-        "period": period,
-        "filing_status": info,
     }

@@ -1,31 +1,24 @@
 # CA Agentic Compliance Platform — Working MVP Walkthrough Guide
 
 > **Core Invariant**: *"The Machine Prepares. The Professional Decides."*  
-> Zero autonomous filing. Zero LLM calculations on financial returns. Strict alignment with ICAI SQC 1, UDIN standards, Rule 88C/88D DRC defense, and IMS 2024–2026 workflows.
+> Zero autonomous filing. Zero LLM calculations on financial returns. Strict alignment with ICAI SQC 1, Rule 88C/88D DRC defense, and IMS 2024–2026 workflows.
 
 ---
 
 ## 1. Quick Start (Single-Click Launch)
 
-You can launch both the **FastAPI Deterministic Backend** and the **Next.js Web Application** using either launcher:
+You can launch the **FastAPI backend**, which also serves the **Firm OS web app**, using either launcher:
 
 - **Windows Batch Launcher**: Double-click [`start_mvp.bat`](file:///c:/Users/sharm/OneDrive/Desktop/Worksmith/CA%20Automation/start_mvp.bat)
 - **PowerShell Launcher**: Run `.\start_mvp.ps1` in PowerShell
 
-### Running Manually in Separate Terminals:
-1. **Backend Terminal**:
-   ```bash
-   cd ca-agentic-platform/backend
-   python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
-   ```
-   *Swagger Docs: [http://localhost:8000/docs](http://localhost:8000/docs)*
-
-2. **Frontend Terminal**:
-   ```bash
-   cd ca-agentic-platform/frontend
-   npm run dev
-   ```
-   *Web Dashboard: [http://localhost:3000](http://localhost:3000)*
+### Running manually:
+```bash
+cd ca-agentic-platform/backend
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+```
+- **Firm OS web app**: [http://localhost:8000](http://localhost:8000)
+- **Swagger Docs**: [http://localhost:8000/docs](http://localhost:8000/docs)
 
 ---
 
@@ -48,44 +41,22 @@ You can launch both the **FastAPI Deterministic Backend** and the **Next.js Web 
 ### B. Two-Way TallyPrime XML Bridge (`backend/app/deterministic_core/tally_bridge.py`)
 - Produces valid Tally XML import payloads (`<ENVELOPE>`, `<VOUCHER VCHTYPE="Purchase">`) for inward invoices and unreconciled vouchers so that the CA firm can push matched entries directly into client Tally company files without re-keying data.
 
-### C. Hardened Human Governance Gates (`frontend/src/app/gates/`)
+### C. Hardened Human Governance Gates (Firm OS web: **Gates & approvals**, `#/gates`)
 - **Gate G2**: Low-Confidence OCR Review (side-by-side invoice image vs field extractor).
 - **Gate G3**: Inward Invoice IMS Review (Accept, Reject, Pending commit).
 - **Gate G4**: ITC Mismatch & Sec 17(5) Resolution with DRC-01C defense simulation.
-- **Gate G6**: Four-Eyes Pre-Filing Review (Audit trail, UDIN requirement check, rule compliance summary).
-- **Gate G7**: Partner Class-3 DSC USB Token Signing (Simulated PKCS#7 detached signature with memory wipe of PIN).
+- **Gate G6**: Four-Eyes Pre-Filing Review (Audit trail, rule compliance summary).
+- **Gate G7**: Partner Approval (ordinary partner approval recorded in the audit chain; the firm files the return itself outside the platform).
 
-### D. Live Interactive Returns Dashboard (`frontend/src/app/returns/page.tsx`)
-- **"Seed DB" Button**: Re-seeds SQLite database with realistic client data (*Rajesh Fabrics Pvt Ltd*, 8 purchase invoices, 7 GSTR-2B feed records).
-- **"Run 2B & IMS Reco" Button**: Calls the Python deterministic engine live, calculating Table 4 figures and displaying matched vs mismatched items.
-- **"Export Tally XML" Button**: Downloads `TallyPrime_Purchase_Import_<Date>.xml` directly in your browser.
-- **"Assemble GSTR-3B" Button**: Runs the 38-rule compliance check on live obligation records.
+### D. Reconciliation (Firm OS web: **Reconciliation**, `#/recon`)
+- **Bank tab**: upload a bank statement CSV and run the reconciler, or import a Tally trial-balance XML.
+- **Export Tally XML**: `GET /api/v1/returns/export-tally-xml` (needs a signed-in session).
 
 ---
 
-## 3. End-to-End CA Workflow Walkthrough (Demo Script)
+## 3. End-to-End Walkthrough (Demo Script)
 
-1. **Step 1: Open the Returns Engine**
-   - Navigate to [http://localhost:3000/returns](http://localhost:3000/returns).
-   - Click **"Seed DB"** to verify backend connectivity.
-   - Click **"Run 2B & IMS Reco"**. Observe the real-time calculated breakdown:
-     - 4 Exact Matches
-     - 1 Value Mismatch (Rule 88D)
-     - ₹38,000 Sec 17(5) Blocked Credit
-     - ₹3,37,500 Net Eligible ITC
-     - Complete Table 4(A)(5), 4(B)(1), and 4(C) matrix!
-   - Click **"Export Tally XML"** to verify generation of valid Tally XML.
-
-2. **Step 2: Review Inward Invoices (Gate G2 & G3)**
-   - Navigate to [http://localhost:3000/documents](http://localhost:3000/documents).
-   - Review uploaded bills, extracted HSN/SAC codes, and confidence scores.
-
-3. **Step 3: Four-Eyes Approval (Gate G6)**
-   - Open [http://localhost:3000/gates/G6-9845](http://localhost:3000/gates/G6-9845).
-   - Review the complete pre-filing audit checklist: 38 deterministic rules passed, variance checks, and UDIN requirement flag.
-   - Click **"Approve Return & Dispatch for DSC"**.
-
-4. **Step 4: Partner DSC Signing (Gate G7)**
-   - Open [http://localhost:3000/gates/G7-9846](http://localhost:3000/gates/G7-9846).
-   - The Partner enters their DSC PIN.
-   - The platform generates a SHA-256 PKCS#7 signature and wipes the PIN from volatile RAM immediately upon completion.
+1. Open [http://localhost:8000](http://localhost:8000) and sign in with a demo persona (local development only).
+2. **Reconciliation** (`#/recon`) → **Bank** tab: upload a bank CSV, run the reconciler, and import a Tally trial-balance XML.
+3. **Intake & vault** (`#/intake`): review uploaded bills and their extraction confidence (Gate G2).
+4. **Gates & approvals** (`#/gates`): a reviewer approves at G6 (four-eyes), then a partner approves at G7. Every decision is sealed into the audit chain (`#/record`).

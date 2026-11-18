@@ -1,4 +1,4 @@
-/* Bahi — core: state, rules engine, permissions, ledger, live agents, shell & primitives. */
+/* Bahi — core: state, rules engine, permissions, ledger, shell & primitives. */
 
 /* The viewer (e.g. an artifact host) may set data-theme itself; keep it unless the person picks one in Bahi. */
 const HOST_THEME = document.documentElement.dataset.theme || null;
@@ -97,12 +97,12 @@ const inFreeze = d => { for (let k = -1; k <= 2; k++) { if (isPeak(new Date(asDa
 const STATES = [
   { k: 'scheduled', n: 'Scheduled', h: 'code', who: 'Rulebook' },
   { k: 'awaiting', n: 'Awaiting papers', h: 'client', who: 'Client' },
-  { k: 'received', n: 'Papers in', h: 'agent', who: 'Autopilot' },
-  { k: 'preparing', n: 'Preparing', h: 'agent', who: 'Autopilot + preparer' },
-  { k: 'reconciled', n: 'Reconciled', h: 'agent', who: 'Autopilot' },
+  { k: 'received', n: 'Papers in', h: 'agent', who: 'Agents' },
+  { k: 'preparing', n: 'Preparing', h: 'agent', who: 'Agents + preparer' },
+  { k: 'reconciled', n: 'Reconciled', h: 'agent', who: 'Agents' },
   { k: 'review', n: 'Four-eyes review', h: 'gate', who: 'Reviewer · G6', gate: 'G6' },
-  { k: 'sign', n: 'Partner sign', h: 'gate', who: 'Partner · G7', gate: 'G7' },
-  { k: 'filed', n: 'Filed · awaiting ack', h: 'code', who: 'Portal · FL-1' },
+  { k: 'sign', n: 'Partner sign-off', h: 'gate', who: 'Partner · G7', gate: 'G7' },
+  { k: 'filed', n: 'Filed · awaiting ack', h: 'code', who: 'Filing team' },
   { k: 'closed', n: 'Closed', h: 'ok', who: 'Done' }
 ];
 const SIDX = Object.fromEntries(STATES.map((s, i) => [s.k, i]));
@@ -183,11 +183,11 @@ function genObligations(clients = ALL_CLIENTS) {
       const team = (c.team && c.team.length) ? c.team : [c.manager].filter(Boolean);
       let prep = pick(team, r);
       if ((st === 'scheduled' || st === 'awaiting') && !c.internal && r() < 0.16) prep = null;
-      const arn = (f.d === 'GST' ? 'AA' + (c.gstin || '36').slice(0, 2) : 'ACK') + String(Math.floor(r() * 1e12)).padStart(12, '0');
+      const ackNo = (f.d === 'GST' ? 'AA' + (c.gstin || '36').slice(0, 2) : 'ACK') + String(Math.floor(r() * 1e12)).padStart(12, '0');
       out.push({
         id, client: c.id, fid: f.id, form: f.f, name: f.n, d: f.d, mode: f.m, due: due.toISOString(), period, state: st,
         prep, rev: c.manager === prep ? c.partner : c.manager, partner: c.partner,
-        docs: [Math.floor(r() * 4) + 3, 0], touchless: r() < 0.78, ack: (st === 'closed' || st === 'filed') && f.m !== 'int' ? arn : null,
+        docs: [Math.floor(r() * 4) + 3, 0], touchless: r() < 0.78, ack: (st === 'closed' || st === 'filed') && f.m !== 'int' ? ackNo : null,
         amount: f.d === 'GST' || f.d === 'TDS' ? Math.round((c.turnover || 2e7) * (0.002 + r() * 0.006) / 100) * 100 : 0
       });
       const o = out[out.length - 1];
@@ -214,11 +214,11 @@ function makeExtension(obs) {
 }
 
 /* ---------------- state & persistence ---------------- */
-const KEY = 'cafirmos.state.v6'; // v6: state persists across days (no daily wipe)
+const KEY = 'cafirmos.state.v7'; // v7: DSC and auto-filing state dropped
 let STATE;
 function freshState() {
   const s = {
-    seededFor: dayKey(TODAY), persona: 'srinivas', theme: 'light', session: null, autopilot: true,
+    seededFor: dayKey(TODAY), persona: 'srinivas', theme: 'light', session: null,
     obligations: genObligations(),
     gates: GATE_ITEMS.map(g => ({ ...g, status: 'pending' })),
     docs: DOCS.map(d => ({ ...d })),
@@ -231,8 +231,7 @@ function freshState() {
     ims: Object.fromEntries(IMS.map(i => [i.inv, { prop: i.prop, sel: true }])),
     patterns: {}, bank: {}, recon: {},
     invoices: INVOICES.map(i => ({ ...i })),
-    dscs: DSCS.map(d => ({ ...d })),
-    reveals: [], leaves: LEAVES.map(l => ({ ...l })), notices: NOTICES.map(n => ({ ...n })),
+    leaves: LEAVES.map(l => ({ ...l })), notices: NOTICES.map(n => ({ ...n })),
     tasks: TASKS.map(x => ({ ...x })), expenses: EXPENSES.map(x => ({ ...x })), notes: NOTES.map(x => ({ ...x })),
     portal: null, portalDone: {}, payments: {},
     newClients: [], ledger: [], feed: [], seenGates: 0, lastSeen: Date.now(), daySignedOff: null
@@ -364,10 +363,10 @@ const LEDGER_TEMPLATES = [
   (o, c, r) => ({ actor: 'IN-3', kind: 'agent', action: `proposed ledger mapping for ${20 + Math.floor(r() * 180)} transactions`, client: c.id, obj: 'Books · ' + o.period, ver: 'IN-3 v1.3.6' }),
   (o, c, r) => ({ actor: 'GS-3', kind: 'agent', action: 'matched purchase register to GSTR-2B', client: c.id, obj: 'GSTR-3B · ' + o.period, ver: 'GS-3 v1.2.0', ref: '2B json' }),
   (o, c) => ({ actor: 'IN-2', kind: 'agent', action: 'sent document request (day −3 rung)', client: c.id, obj: o.form + ' · ' + o.period, ver: 'IN-2 v1.2.3' }),
-  (o, c) => ({ actor: 'FL-1', kind: 'agent', action: 'captured acknowledgement from portal', client: c.id, obj: o.form + ' · ' + o.period, ver: 'FL-1 v1.4.1', ref: 'ARN' }),
+  (o, c) => ({ actor: c.partner, kind: 'human', action: 'recorded the acknowledgement number', client: c.id, obj: o.form + ' · ' + o.period }),
   (o, c) => ({ actor: o.prep, kind: 'human', action: 'prepared and submitted for review', client: c.id, obj: o.form + ' · ' + o.period }),
   (o, c) => ({ actor: o.rev, kind: 'human', action: 'reviewed — four eyes (G6)', client: c.id, obj: o.form + ' · ' + o.period }),
-  (o, c) => ({ actor: c.partner, kind: 'human', action: 'signed with DSC (G7)', client: c.id, obj: o.form + ' · ' + o.period }),
+  (o, c) => ({ actor: c.partner, kind: 'human', action: 'approved for filing (G7)', client: c.id, obj: o.form + ' · ' + o.period }),
   (o, c) => ({ actor: 'CL-1', kind: 'agent', action: 'answered "Is it filed?" from stored data', client: c.id, obj: 'WhatsApp', ver: 'CL-1 v1.1.5' }),
   (o, c) => ({ actor: 'DT-2', kind: 'agent', action: 'reconciled AIS / 26AS lines', client: c.id, obj: 'Direct tax', ver: 'DT-2 v1.4.5' }),
   (o, c) => ({ actor: 'GS-5', kind: 'agent', action: 'ran 38 rules — 0 blocking', client: c.id, obj: o.form + ' · ' + o.period, ver: 'GS-5 v1.5.2', rule: 'rb 2026.10.2' }),
@@ -376,64 +375,11 @@ const LEDGER_TEMPLATES = [
   (o, c) => ({ actor: 'system', kind: 'code', action: 'computed liability from deterministic library', client: c.id, obj: o.form + ' · ' + o.period, rule: 'rb 2026.10.2' })
 ];
 
-/* ---------------- live agents (simulation of the runtime) ---------------- */
-const LIVE = { timer: null, pending: 0 };
-function liveTick() {
-  if (!STATE.autopilot || document.hidden) return;
-  const vis = STATE.obligations.filter(o => canSeeClient(o.client));
-  const r = Math.random;
-  const roll = r();
-  let ev, changed = false;
-  if (roll < 0.22) {
-    const o = pick(vis.filter(o => o.state === 'filed')) ;
-    if (o) { o.state = 'closed'; o.ack = (o.d === 'GST' ? 'AA36' : 'ACK') + String(Math.floor(r() * 1e12)).padStart(12, '0'); ev = { actor: 'FL-1', kind: 'agent', action: `captured acknowledgement ${o.ack}`, client: o.client, obj: o.form + ' · ' + o.period }; changed = true; }
-  } else if (roll < 0.48) {
-    const o = pick(vis.filter(o => ['received', 'preparing'].includes(o.state)));
-    if (o) { const nx = o.state === 'received' ? 'preparing' : 'reconciled'; o.state = nx; ev = { actor: nx === 'preparing' ? 'IN-3' : (o.d === 'GST' ? 'GS-3' : o.d === 'TDS' ? 'DT-1' : 'IN-4'), kind: 'agent', action: nx === 'preparing' ? 'classified transactions and opened the working file' : 'finished reconciliation — differences explained', client: o.client, obj: o.form + ' · ' + o.period }; changed = true; }
-  } else if (roll < 0.6) {
-    const o = pick(vis.filter(o => o.state === 'awaiting'));
-    if (o) { o.docs[1] = o.docs[0]; o.state = 'received'; ev = { actor: 'IN-1', kind: 'agent', action: `received ${o.docs[0]} documents — all read above 0.85`, client: o.client, obj: o.form + ' · ' + o.period }; changed = true; }
-  }
-  if (!ev) {
-    const c = pick(visibleClients().filter(c => !c.internal));
-    const t = pick([
-      () => ({ actor: 'IN-2', kind: 'agent', action: `sent ${pick(['day −7', 'day −3', 'day −1'])} document request in ${c.lang}`, client: c.id, obj: 'Automation · Document request ladder' }),
-      () => ({ actor: 'CL-1', kind: 'agent', action: `answered "${pick(CLOSED_LIST)}" on ${c.channel}`, client: c.id, obj: 'Client desk' }),
-      () => ({ actor: 'IN-1', kind: 'agent', action: `acknowledged ${2 + Math.floor(r() * 5)} files received on ${c.channel}`, client: c.id, obj: 'Automation · Receipt acknowledgement' }),
-      () => ({ actor: 'IN-3', kind: 'agent', action: `proposed mappings for ${10 + Math.floor(r() * 90)} bank lines`, client: c.id, obj: 'Books' }),
-      () => ({ actor: 'DT-1', kind: 'agent', action: 'verified 12 payee PANs — 1 inoperative flagged', client: c.id, obj: 'TDS' }),
-      () => ({ actor: 'GS-2', kind: 'agent', action: `proposed IMS actions on ${3 + Math.floor(r() * 12)} new supplier invoices`, client: c.id, obj: 'IMS' }),
-      () => ({ actor: 'FO-4', kind: 'agent', action: 'swept CBIC, CBDT, MCA & ICAI feeds — nothing new', client: null, obj: 'Regulatory watch' }),
-      () => ({ actor: 'FO-5', kind: 'agent', action: 'injected a known-defective proposal into a review queue', client: null, obj: 'Quality canary' })
-    ])();
-    ev = t;
-  }
-  const rec = ledgerAdd(ev);
-  STATE.feed.unshift(rec); STATE.feed = STATE.feed.slice(0, 60);
-  save();
-  onLive(rec, changed);
-}
-function onLive(rec, changed) {
-  const feed = $('#live-feed');
-  if (feed) { feed.insertAdjacentHTML('afterbegin', feedItem(rec, true)); while (feed.children.length > 14) feed.lastElementChild.remove(); }
-  $$('[data-live-count]').forEach(el => el.textContent = Number(el.textContent || 0) + 1);
-  if (changed && CURRENT.page !== 'today') {
-    LIVE.pending++;
-    const pill = $('#refresh-pill');
-    if (pill) { pill.classList.remove('hidden'); pill.querySelector('b').textContent = LIVE.pending; }
-  }
-  updateCounts();
-}
 function feedItem(r, isNew) {
   const c = r.client ? clientById(r.client) : null;
   const who = r.kind === 'agent' ? `<span class="glyph agent sm">${esc(r.actor)}</span>` : r.kind === 'code' ? `<span class="glyph code sm">fx</span>` : r.kind === 'client' ? '<span class="glyph client sm"></span>' : avatar(r.actor, 'sm');
   return `<div class="feed-item k-${r.kind} ${isNew ? 'new' : ''}">${who}<div class="body"><b>${esc(actorName(r.actor) === 'system' ? 'Computation core' : actorName(r.actor))}</b> ${esc(r.action)}${c ? ` · <a href="#/client/${c.id}" class="dim">${esc(c.short)}</a>` : ''}<div class="tiny muted">${esc(r.obj || '')}</div></div><span class="time">${fmtT(r.at)}</span></div>`;
 }
-/* The simulated runtime used to move filings and invent acknowledgements every 6.5s.
-   It is switched off so that nothing on screen claims to have happened unless a person
-   (or, later, a real backend job) did it. Set window.FIRM_OS_SIMULATE = true to demo it. */
-function startLive() { clearInterval(LIVE.timer); if (window.FIRM_OS_SIMULATE === true) LIVE.timer = setInterval(liveTick, 6500); }
-
 /* ---------------- gate queue (seeded items + obligations at G6/G7) ---------------- */
 function gateQueue() {
   const items = STATE.gates.filter(g => g.status === 'pending' && canSeeClient(g.client)).map(g => ({ ...g, src: 'item' }));
@@ -483,14 +429,12 @@ const PAGES = [
   { k: 'catalogue', n: 'Filing catalogue', i: 'grid', g: 'Firm' },
   { k: 'team', n: 'Team & capacity', i: 'users', g: 'Firm' },
   { k: 'billing', n: 'Billing & recovery', i: 'rupee', g: 'Firm', cap: 'billing' },
-  { k: 'vault', n: 'DSC & credentials', i: 'key', g: 'Firm' },
   { k: 'quality', n: 'Quality review', i: 'checkCircle', g: 'Firm' },
   { k: 'agents', n: 'Autopilot', i: 'hex', g: 'Machine' },
   { k: 'connectors', n: 'Connectors', i: 'plug', g: 'Machine' },
   { k: 'rulebook', n: 'Rulebook', i: 'scroll', g: 'Machine' },
   { k: 'record', n: 'The record', i: 'chain', g: 'Machine', cap: 'ledger' },
-  { k: 'access', n: 'Access & roles', i: 'shield', g: 'Machine' },
-  { k: 'coverage', n: 'Owner\'s coverage audit', i: 'clipboard', g: 'Machine' }
+  { k: 'access', n: 'Access & roles', i: 'shield', g: 'Machine' }
 ];
 const VIEWS = {};
 let CURRENT = { page: 'today', arg: null };
@@ -507,13 +451,12 @@ function renderShell() {
         return `<a href="#/${x.k}" data-k="${x.k}" class="${locked ? 'locked' : ''}">${icon(locked ? 'lock' : x.i)}<span>${x.n}</span>${x.count ? `<span class="count ${x.cc || ''}" data-count="${x.k}"></span>` : ''}</a>`;
       }).join('')).join('')}
     </nav>
-    <div class="sidebar-foot">Synthetic demo firm & data.<br>Autopilot never files, signs or submits — only people can.<br><a href="#" id="reset-demo" style="color:var(--gold)">Reset demo</a></div>`;
+    <div class="sidebar-foot">Synthetic demo firm & data.<br>Agents prepare and draft; people approve and file.<br><a href="#" id="reset-demo" style="color:var(--gold)">Reset demo</a></div>`;
   $('#topbar').innerHTML = `
     <button class="icon-btn menu-btn" id="menu-btn" aria-label="Open menu">${icon('menu')}</button>
     <div class="search" id="open-palette" role="button" tabindex="0">${icon('search')}<span class="ph">Search clients, filings, people, actions…</span><kbd>⌘K</kbd></div>
     <div class="spacer"></div>
     <span class="pulse-pill hide-sm" id="peak-pill"></span>
-    <button class="pulse-pill hide-sm" id="autopilot" style="cursor:pointer" title="${window.FIRM_OS_SIMULATE === true ? 'Demo simulation running' : 'Agents are not connected yet — nothing runs automatically'}">${window.FIRM_OS_SIMULATE === true ? (STATE.autopilot ? '<span class="dot live"></span> Simulation on' : '<span class="dot" style="background:var(--ink-3)"></span> Simulation paused') : '<span class="dot" style="background:var(--ink-3)"></span> Autopilot not connected'}</button>
     <button class="icon-btn" id="bell" aria-label="Alerts" title="Alerts">${icon('bell')}<span class="bcount" data-bell></span></button>
     <button class="icon-btn" id="legend-btn" aria-label="Colour key" title="Colour key">${icon('palette')}</button>
     <button class="icon-btn" id="theme-btn" aria-label="Toggle theme">${icon(document.documentElement.dataset.theme === 'dark' || (!document.documentElement.dataset.theme && matchMedia('(prefers-color-scheme: dark)').matches) ? 'sun' : 'moon')}</button>
@@ -530,7 +473,6 @@ function renderShell() {
   $('#legend-btn').onclick = openLegend;
   $('#assign-btn').onclick = () => openTaskModal();
   $('#bell').onclick = () => openSheet({ title: 'Alerts', sub: 'Things that need attention across your clients, newest rules first', body: `<div style="display:grid;gap:10px">${alertCards(buildAlerts())}</div><div class="card mt16"><div class="card-h"><h3>Waiting on you</h3></div><div class="list">${gateQueue().filter(g => gateAllowed(g).ok).slice(0, 5).map(g => gateRow(g)).join('') || '<div class="empty small">Nothing.</div>'}</div></div>`, onMount: s => { bindAlerts(s); bindGateRows(s); } });
-  $('#autopilot').onclick = () => { if (window.FIRM_OS_SIMULATE !== true) return toast('Agents are not connected yet. Every change you see was made by a person in this workspace.', 'warn', 'info'); STATE.autopilot = !STATE.autopilot; save(); renderShell(); highlightNav(); toast(STATE.autopilot ? 'Autopilot resumed' : 'Autopilot paused — nothing new will be prepared', STATE.autopilot ? 'agent' : 'warn', STATE.autopilot ? 'play' : 'pause'); };
   updateCounts(); highlightNav();
 }
 function updateCounts() {
@@ -547,7 +489,6 @@ function route() {
   let [page, arg] = h.split('/');
   if (page !== 'portal' && page !== 'login' && !STATE.session) { LOGIN_NEXT = h; page = 'login'; arg = null; }
   CURRENT = { page, arg };
-  LIVE.pending = 0;
   const view = $('#view');
   const meta = PAGES.find(p => p.k === page);
   $('.app').classList.remove('nav-open');
@@ -558,8 +499,6 @@ function route() {
     catch (err) { console.error(err); view.innerHTML = `<div class="empty">${icon('alert')}<p>Something went wrong rendering this page.</p><pre class="small">${esc(err.message)}</pre></div>`; }
   } else { navTo('#/today'); return; }
   view.classList.remove('view'); void view.offsetWidth; view.classList.add('view');
-  view.insertAdjacentHTML('beforeend', `<button class="pulse-pill hidden" id="refresh-pill" style="position:fixed;bottom:22px;right:22px;z-index:40;cursor:pointer;box-shadow:var(--shadow)">${icon('refresh').replace('<svg', '<svg width="15" height="15"')} <b>0</b> new updates</button>`);
-  $('#refresh-pill').onclick = () => route();
   highlightNav(); updateCounts();
   document.title = page === 'login' ? 'Sign in · CA Firm OS' : (meta ? meta.n : page === 'client' ? (clientById(arg)?.short || 'Client') : 'Home') + ' · CA Firm OS';
   window.scrollTo({ top: 0 });
@@ -659,7 +598,7 @@ function openLegend() {
     <div class="grid g2 mt16">
       <div class="card pad"><div class="upper muted mb8">Who holds it</div>
         <div class="list">
-          <div class="flex mb8"><span class="glyph agent">AUTO</span><div><b>Autopilot</b> · peacock teal, hexagon<div class="small muted">The system reading, matching, drafting. Never signs or files.</div></div></div>
+          <div class="flex mb8"><span class="glyph agent">AUTO</span><div><b>Autopilot</b> · peacock teal, hexagon<div class="small muted">The system reading, matching and drafting for people to review.</div></div></div>
           <div class="flex mb8"><span class="glyph client"></span><div><b>Client</b> · sky blue, circle<div class="small muted">Waiting on the client — papers, approvals, payments.</div></div></div>
           <div class="flex mb8"><span class="glyph gate">G7</span><div><b>Human gate</b> · stamp violet, seal<div class="small muted">Work stops until a named person acts. Violet, like office stamp ink.</div></div></div>
           <div class="flex"><span class="glyph code">fx</span><div><b>Portal & code</b> · graphite, square<div class="small muted">Rulebook, computation core and government portals.</div></div></div>
@@ -694,7 +633,6 @@ function openPalette() {
     { t: 'Your morning brief', k: 'Action', go: () => openBrief() },
     { t: 'Toggle light / dark', k: 'Action', go: cycleTheme },
     { t: 'Show the colour key', k: 'Action', go: openLegend },
-    { t: STATE.autopilot ? 'Pause autopilot' : 'Resume autopilot', k: 'Action', go: () => $('#autopilot').click() },
     { t: 'Verify the record\'s hash chain', k: 'Action', go: () => { navTo('#/record'); } },
     { t: 'Reset demo', k: 'Action', go: () => $('#reset-demo').click() }
   ];
@@ -742,7 +680,7 @@ const clientLink = id => { const c = clientById(id); return c ? `<a href="#/clie
 
 /* ---------------- boot ---------------- */
 function boot() {
-  load(); applyTheme(); renderShell(); route(); startLive();
+  load(); applyTheme(); renderShell(); route();
   window.addEventListener('hashchange', () => { if (location.hash && location.hash !== NAV) { NAV = location.hash; route(); } });
   document.addEventListener('click', e => { const a = e.target.closest && e.target.closest('a[href^="#/"]'); if (a) { e.preventDefault(); navTo(a.getAttribute('href')); } });
   document.addEventListener('keydown', e => {

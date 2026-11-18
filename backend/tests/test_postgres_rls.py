@@ -17,13 +17,9 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
-import base64
-import hashlib
 
 import httpx
-import jwt
 import pytest
-from cryptography.hazmat.primitives.asymmetric import ec
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import DBAPIError, ProgrammingError
 
@@ -194,7 +190,7 @@ def test_tenant_sees_only_its_own_rows():
 
 def test_no_tenant_context_means_no_rows():
     with app() as c:
-        for table in ("clients", "users", "firms", "audit_blocks", "invoices", "signer_devices", "otp_records"):
+        for table in ("clients", "users", "firms", "audit_blocks", "invoices", "otp_records"):
             assert c.execute(text(f"SELECT count(*) FROM {table}")).scalar_one() == 0, table
 
 
@@ -252,7 +248,7 @@ def test_system_scope_opens_identity_tables_only():
         assert c.execute(text("SELECT count(*) FROM users")).scalar_one() == 2
         assert c.execute(text("SELECT count(*) FROM firms")).scalar_one() == 2
         assert c.execute(text("SELECT count(*) FROM otp_records")).scalar_one() == 0  # reachable, just empty
-        for table in ("clients", "audit_blocks", "invoices", "gst_returns", "firm_obligations", "dsc_certificates"):
+        for table in ("clients", "audit_blocks", "invoices", "gst_returns", "firm_obligations"):
             assert c.execute(text(f"SELECT count(*) FROM {table}")).scalar_one() == 0, table
 
 
@@ -317,7 +313,7 @@ def test_tenant_queries_use_tenant_leading_indexes():
     with owner() as conn:
         names = {r[0] for r in conn.execute(text("SELECT indexname FROM pg_indexes WHERE schemaname='public'"))}
     for expected in (
-        "ix_invoices_tenant_client_date", "ix_firm_obligations_tenant_due", "ix_signing_requests_tenant_status",
+        "ix_invoices_tenant_client_date", "ix_firm_obligations_tenant_due",
         "ix_clients_tenant_name_live", "brin_audit_ledger_created", "ix_users_phone",
     ):
         assert expected in names
@@ -394,44 +390,6 @@ def test_api_end_to_end_isolates_firms_on_postgres():
         assert names_b == {"Client of BBBPB0002B"}
         assert client.get(f"/clients/{client_id}", headers=head_b).status_code == 404
         assert client.get("/clients/", headers={}).status_code == 401
-
-        # Desktop-signer device grant: pre-login (system scope) -> approval -> DPoP-bound tokens -> signing API
-        key = ec.generate_private_key(ec.SECP256R1())
-        numbers = key.public_key().public_numbers()
-        b64 = lambda raw: base64.urlsafe_b64encode(raw).rstrip(b"=").decode()  # noqa: E731
-        jwk = {"kty": "EC", "crv": "P-256", "x": b64(numbers.x.to_bytes(32, "big")), "y": b64(numbers.y.to_bytes(32, "big"))}
-
-        def proof(method: str, path: str, access: str = "") -> str:
-            claims = {"jti": uuid.uuid4().hex, "htm": method, "htu": base + path, "iat": int(time.time())}
-            if access:
-                claims["ath"] = b64(hashlib.sha256(access.encode()).digest())
-            return jwt.encode(claims, key, algorithm="ES256", headers={"typ": "dpop+jwt", "jwk": jwk})
-
-        code = client.post("/signing/device/code", json={"device_name": "E2E signer 1.0"})
-        assert code.status_code == 200, code.text
-        approved = client.post(
-            "/signing/device/approve", headers=head_a, json={"user_code": code.json()["user_code"], "approve": True}
-        )
-        assert approved.status_code == 200, approved.text
-        token = client.post(
-            "/signing/device/token", json={"device_code": code.json()["device_code"]},
-            headers={"DPoP": proof("POST", "/signing/device/token")},
-        )
-        assert token.status_code == 200, token.text
-        access, refresh = token.json()["access_token"], token.json()["refresh_token"]
-        pending = client.get(
-            "/signing/requests/pending",
-            headers={"Authorization": f"Bearer {access}", "DPoP": proof("GET", "/signing/requests/pending", access)},
-        )
-        assert pending.status_code == 200, pending.text
-        assert client.get("/signing/requests/pending", headers={"Authorization": f"Bearer {access}"}).status_code == 401
-        rotated = client.post(
-            "/signing/device/refresh", json={"refresh_token": refresh},
-            headers={"DPoP": proof("POST", "/signing/device/refresh")},
-        )
-        assert rotated.status_code == 200, rotated.text
-        assert len(client.get("/signing/devices", headers=head_a).json()) == 1
-        assert client.get("/signing/devices", headers=head_b).json() == []
     finally:
         server.terminate()
         try:
@@ -445,8 +403,3 @@ def test_api_end_to_end_isolates_firms_on_postgres():
             "SELECT firm_id, count(*) FROM audit_blocks WHERE action = 'LOGIN_OTP_VERIFIED' GROUP BY firm_id"
         )).all())
     assert per_firm.get(FIRM_A) == 1 and per_firm.get(FIRM_B) == 1
-    with owner() as conn:
-        enrolled = conn.execute(text(
-            "SELECT count(*) FROM audit_blocks WHERE firm_id = :f AND action = 'SIGNER_DEVICE_ENROLLED'"
-        ), {"f": FIRM_A}).scalar_one()
-    assert enrolled == 1

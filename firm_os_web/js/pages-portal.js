@@ -481,7 +481,7 @@ VIEWS.login = {
       <section class="login-cover">
         <div class="lc-top">${BRAND_MARK}<div><b>${esc(FIRM.name)}</b><span>${esc(FIRM.sub)} · ${esc(FIRM.city)}</span></div></div>
         <div class="lc-mid"><div class="upper" style="color:var(--gold)">CA Firm OS</div><h1>The whole practice,<br><em>on one ledger.</em></h1>
-          <ul><li>Every filing scheduled from each client's profile — ${CATALOGUE.length} types</li><li>Autopilot prepares; people approve at 18 gates</li><li>Nothing is filed without a partner's signature</li><li>Every act written to a permanent record</li></ul></div>
+          <ul><li>Every filing scheduled from each client's profile — ${CATALOGUE.length} types</li><li>Agents prepare; people review and approve at 18 gates</li><li>Every return is signed off by a partner before it is filed</li><li>Every act written to a permanent record</li></ul></div>
         <div class="lc-foot">Every sign-in is logged · sessions lock after 15 idle minutes</div>
       </section>
       <section class="login-panel"><div style="width:min(440px,100%);display:grid;gap:14px">

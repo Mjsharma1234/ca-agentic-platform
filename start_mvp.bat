@@ -1,7 +1,7 @@
 @echo off
-TITLE CA Firm OS: Internal Ops Tracker & Automated Filings
+TITLE CA Firm OS: Internal Ops Tracker
 echo =========================================================================
-echo        Starting CA Firm OS: Internal Ops Tracker & Automated Filings      
+echo        Starting CA Firm OS: Internal Ops Tracker      
 echo =========================================================================
 echo.
 
@@ -16,7 +16,7 @@ start http://localhost:8000
 echo.
 echo =========================================================================
 echo Production Services Active:
-echo  - CA Firm OS (Ops Tracker + Filings): http://localhost:8000
+echo  - CA Firm OS (Ops Tracker): http://localhost:8000
 echo  - Interactive Swagger API Docs:       http://localhost:8000/docs
 echo =========================================================================
 pause

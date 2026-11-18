@@ -42,7 +42,7 @@ class StatutoryCalendarLiveEngine:
                 "portal": "GSTN Common Portal (gst.gov.in)",
                 "online": True, # Fail gracefully to verified statutory schedule
                 "status_code": 200,
-                "notice": "Resilient GSP Gateway Active",
+                "notice": "Portal probe failed; calendar served from the built-in schedule",
                 "checked_at": datetime.utcnow().isoformat()
             }
 

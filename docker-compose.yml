@@ -14,7 +14,7 @@ services:
       - SECRET_KEY=${SECRET_KEY:?set SECRET_KEY in .env}
       - APP_NAME=CA Firm OS Platform
       - DEBUG=${DEBUG:-true}
-      - CORS_ORIGINS=["https://firmosweb.vercel.app","http://localhost:3000","http://localhost:8000"]
+      - CORS_ORIGINS=["https://firmosweb.vercel.app","http://localhost:8000"]
     depends_on:
       postgres:
         condition: service_healthy

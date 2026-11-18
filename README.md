@@ -1,7 +1,7 @@
-# CA Firm OS: Internal Ops Tracker & Autonomous Filings Platform
+# CA Firm OS: Internal Ops Tracker & Compliance Preparation Platform
 
 > **Core Invariant**: *"The Machine Prepares. The Professional Decides."*  
-> An autonomous operations tracker and deterministic compliance orchestrator built specifically for Indian Chartered Accountant firms, enforcing strict ICAI SQC 1 governance, ethical walls, four-eyes reviews, and Class-3 DSC cryptographic signing.
+> An autonomous operations tracker and deterministic compliance orchestrator built specifically for Indian Chartered Accountant firms, enforcing strict ICAI SQC 1 governance, ethical walls, and four-eyes reviews. Returns are prepared and reviewed here; the firm files them itself.
 
 [![Live on Vercel](https://img.shields.io/badge/Vercel-Live%20Production-black?logo=vercel)](https://firmosweb.vercel.app)
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white)](docker-compose.yml)
@@ -20,7 +20,7 @@
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
 │                        STRATUM 3: HUMAN GOVERNANCE                     │
-│  G1 Chase │ G2 OCR Audit │ G3 IMS Commit │ G4 Reco │ G6 Four-Eyes │ G7 DSC │
+│  G1 Chase │ G2 OCR Audit │ G3 IMS Commit │ G4 Reco │ G6 Four-Eyes │ G7 Partner │
 └────────────────────────────────────┬───────────────────────────────────┘
                                      │ Approved Decisions Only
 ┌────────────────────────────────────▼───────────────────────────────────┐
@@ -33,7 +33,7 @@
 │                      STRATUM 1: DETERMINISTIC CORE                     │
 │   • 6-Pass 2B Reco Engine       • 38 Return Verification Rules         │
 │   • Rule 88C/88D Variance Calc  • Sec 17(5) Blocked Reversal & Table 4 │
-│   • TallyPrime XML Bridge       • SHA-256 PKCS#7 DSC Signing Ceremony  │
+│   • TallyPrime XML Bridge       • SHA-256 Hash-Chained Audit Ledger    │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -42,7 +42,7 @@
 ## 🚀 Key Modules & Capabilities
 
 ### 1. Internal Ops Tracker
-- **The Line**: 6-stage pipeline (`Documents Pending` → `Intake & OCR` → `Reconciliation` → `Review` → `Signing` → `Filed & Acknowledged`).
+- **The Line**: 6-stage pipeline (`Documents Pending` → `Intake & OCR` → `Reconciliation` → `Review` → `Partner Approval` → `Filed & Acknowledged` (filing itself is done by the firm; the platform only tracks it)).
 - **Partner's 09:00 Morning Brief**: Automated daily briefing on WhatsApp/Web summarizing overnight portal messages, overdue notices, high-value gate items, and staff capacity.
 - **Daybook**: Sealed, daily immutable operational diary of everything done across the firm.
 - **Statutory Clock**: Real-time regulatory countdown with 3-day internal safety buffers across 12 compliance domains.
@@ -50,7 +50,7 @@
 - **Team & Capacity (CEILING-60)**: Workload tracking, attendance, timesheets, and strict adherence to the ICAI 60-tax-audit ceiling per partner.
 - **Billing & Recovery**: WIP tracking, draft invoice generation from finished work, fee collection, and rebillable client expense reimbursement.
 
-### 2. Autonomous Filing Fleet (12 Statutory Domains)
+### 2. Statutory Coverage Tracked (12 Domains)
 - **GST**: GSTR-1, IFF, GSTR-1A, GSTR-3B, PMT-06, CMP-08, GSTR-4, GSTR-9/9C.
 - **Income Tax**: ITR-1 to ITR-7, Form 3CA/3CB-3CD (Tax Audit), 10B/10BB.
 - **TDS / TCS**: 24Q, 26Q, 27Q, 27EQ with automated FVU schema validation.
@@ -58,13 +58,12 @@
 - **LLP**: Form 8, Form 11, FiLLiP.
 - **Payroll & Labour**: EPF ECR, ESI Monthly, State Professional Tax (PT).
 - **Books & Close**: Monthly close, trial balance, and two-way TallyPrime XML sync.
-- **FEMA, SEBI & Certifications**: FLA return, LODR filings, and UDIN-backed certificates.
+- **FEMA, SEBI & Certifications**: FLA return and LODR filings tracked as manual workflows.
 
 ### 3. Production Backend APIs (`/api/v1/firm-os`)
 - `GET /api/v1/firm-os/state`: Persistent firm state loaded from SQLite/PostgreSQL.
 - `POST /api/v1/firm-os/state/sync`: Two-way state synchronization with SHA-256 integrity hash.
 - `POST /api/v1/firm-os/gates/{gate_code}/decide`: Production gate engine enforcing four-eyes reviews, role hierarchy (MP, PT, MG, SA), and transaction limits.
-- `POST /api/v1/firm-os/dsc/sign`: Partner Class-3 DSC USB token signing ceremony with immediate volatile memory wipe of PIN.
 - `POST /api/v1/firm-os/reconciliation/run`: Deterministic 6-pass reconciliation engine.
 - `GET /api/v1/firm-os/export/tally-xml`: Downloadable TallyPrime XML import payload.
 - `GET /api/v1/firm-os/audit-trail`: Immutable SHA-256 hash-chained audit ledger for ICAI peer review.

@@ -17,7 +17,7 @@ from app.main import app
 from app.models import AuditBlock, Firm, User
 
 from .test_api_security_gates import env  # noqa: F401
-from .test_dpop_ocsp_hardening import prod
+from .test_shared_store_and_production_config import prod
 
 PROJECT = "ca-test-project"
 KID = "test-kid-1"

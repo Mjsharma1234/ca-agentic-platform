@@ -1,4 +1,3 @@
-import logging
 import os
 
 from pydantic import model_validator
@@ -6,8 +5,6 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import List, Optional
 
 INSECURE_DEFAULT_SECRET = "your-super-secret-key-change-in-production"
-
-_logger = logging.getLogger("config")
 
 class Settings(BaseSettings):
     DATABASE_URL: str = "sqlite+aiosqlite:///./ca_platform.db"
@@ -30,24 +27,7 @@ class Settings(BaseSettings):
     # auto-created in DEBUG mode (SQLite dev loop); production must run `alembic upgrade head`.
     AUTO_CREATE_TABLES: Optional[bool] = None
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
-    SIGNING_REQUEST_TTL_SECONDS: int = 300
-    # DSC trust & revocation (see app/deterministic_core/dsc_revocation.py)
-    DSC_TRUSTED_CA_PEM_PATH: Optional[str] = None
-    DSC_TRUSTED_CA_PEM: Optional[str] = None   # inline PEM alternative to the path (handy for PaaS env vars)
-    DSC_REVOCATION_MODE: str = "soft"          # off | soft | strict
-    DSC_CRL_CACHE_SECONDS: int = 3600
-    DSC_OCSP_ENABLED: bool = True              # try OCSP first, fall back to the CRL
-    DSC_OCSP_CACHE_SECONDS: int = 300
-    # Desktop signer device grant
-    SIGNER_ACCESS_TOKEN_MINUTES: int = 15
-    SIGNER_REFRESH_DAYS: int = 30
-    DEVICE_CODE_TTL_SECONDS: int = 600
-    PUBLIC_WEB_URL: str = "http://localhost:3000"
-    # Public base URL of this API as the signer sees it (scheme+host, no path). DPoP proofs are bound
-    # to it, so it must be set behind a TLS-terminating proxy; when unset the request URL is used.
-    PUBLIC_API_URL: Optional[str] = None
-    SIGNER_REQUIRE_DPOP: bool = True           # RFC 9449 sender-constrained signer tokens
-    # Optional Redis URL shared by all workers for rate limits and DPoP replay protection.
+    # Optional Redis URL shared by all workers for rate limits and Firebase token replay protection.
     # Unset (or unreachable) => per-process in-memory fallback.
     SHARED_STORE_URL: Optional[str] = None
     APP_NAME: str = "CA Agentic Compliance Platform"
@@ -56,13 +36,6 @@ class Settings(BaseSettings):
     DEBUG: bool = False
     CORS_ORIGINS: List[str] = ["*"]
 
-    # GST Suvidha Provider simulation. Unset => simulated in DEBUG only; production (DEBUG=false)
-    # refuses to boot until it is set explicitly, so real returns can never be "filed" against the
-    # simulator by accident.
-    GSP_SIMULATION_MODE: Optional[bool] = None
-
-    GSP_PRIMARY_URL: Optional[str] = None
-    GSP_SECONDARY_URL: Optional[str] = None
     WABA_API_URL: Optional[str] = None
     WABA_TOKEN: Optional[str] = None
     
@@ -97,8 +70,6 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _fail_closed_in_production(self):
-        if self.DSC_REVOCATION_MODE not in ("off", "soft", "strict"):
-            raise ValueError("DSC_REVOCATION_MODE must be off, soft or strict.")
         if self.LOGIN_PROVIDER not in (None, "otp", "firebase"):
             raise ValueError("LOGIN_PROVIDER must be otp or firebase.")
         if self.effective_login_provider == "firebase" and not self.FIREBASE_PROJECT_ID:
@@ -116,7 +87,6 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "OTP_SANDBOX_MODE must be false when DEBUG is false: sandbox mode returns OTPs in API responses."
                 )
-            self._require_dsc_trust_anchor()
             if self.effective_login_provider != "firebase":
                 raise ValueError(
                     "Every login must go through Firebase phone OTP when DEBUG is false: set FIREBASE_PROJECT_ID "
@@ -127,49 +97,21 @@ class Settings(BaseSettings):
                     "DB_APP_ROLE must be set (to `ca_app`) when DEBUG is false on PostgreSQL: without it the API "
                     "connects as a role that bypasses row-level security."
                 )
-            if self.DSC_REVOCATION_MODE == "off":
-                raise ValueError("DSC_REVOCATION_MODE must be soft or strict when DEBUG is false.")
-            if not self.PUBLIC_WEB_URL.lower().startswith("https://"):
-                raise ValueError("PUBLIC_WEB_URL must be an https:// URL when DEBUG is false.")
-            if self.SIGNER_REQUIRE_DPOP and not (self.PUBLIC_API_URL or "").lower().startswith("https://"):
-                raise ValueError(
-                    "PUBLIC_API_URL must be the public https:// URL of this API when DEBUG is false "
-                    "(signer DPoP proofs are bound to it). Set SIGNER_REQUIRE_DPOP=false only to disable DPoP."
-                )
             if os.getenv("ALLOW_TEST_AUTH_HEADERS", "").lower() in ("true", "1"):
                 raise ValueError(
                     "ALLOW_TEST_AUTH_HEADERS must not be set when DEBUG is false: it lets any request "
                     "impersonate any user via X-User-Id headers."
                 )
-            if self.GSP_SIMULATION_MODE is None:
-                raise ValueError(
-                    "GSP_SIMULATION_MODE must be set explicitly (true/false) when DEBUG is false: left unset, "
-                    "real GST returns would silently be 'filed' against the built-in simulator."
-                )
-            if self.GSP_SIMULATION_MODE:
-                _logger.warning(
-                    "GSP_SIMULATION_MODE=true with DEBUG=false: GST filings will receive SIMULATED ARNs. "
-                    "Only acceptable for demo deployments."
-                )
             if not self.SHARED_STORE_URL:
                 raise ValueError(
                     "SHARED_STORE_URL (Redis) is required when DEBUG is false: without it, rate limits and "
-                    "DPoP/Firebase replay protection are per-process and multiply by the number of workers."
+                    "Firebase replay protection are per-process and multiply by the number of workers."
                 )
             if "*" in self.CORS_ORIGINS:
                 raise ValueError(
                     "CORS_ORIGINS must list explicit origins when DEBUG is false (no '*')."
                 )
         return self
-
-    def _require_dsc_trust_anchor(self) -> None:
-        """Production must verify DSC issuers and CRL/OCSP signatures; refuse to boot without a usable anchor."""
-        from ..deterministic_core.dsc_trust import TrustAnchorError, read_trust_anchor
-
-        try:
-            read_trust_anchor(self.DSC_TRUSTED_CA_PEM_PATH, self.DSC_TRUSTED_CA_PEM)
-        except TrustAnchorError as exc:
-            raise ValueError(f"DSC trust anchor is required when DEBUG is false: {exc}") from exc
 
     @property
     def effective_login_provider(self) -> str:

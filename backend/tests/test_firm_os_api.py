@@ -8,12 +8,10 @@ from app.api.v1.firm_os import (
     get_firm_state,
     sync_firm_state,
     decide_gate,
-    execute_dsc_signature,
     run_reconciliation,
     export_tally_xml,
     get_audit_trail,
     GateDecisionRequest,
-    DSCSigningRequest,
     StateSyncRequest
 )
 from fastapi import HTTPException
@@ -63,7 +61,7 @@ def test_four_eyes_invariant_enforcement(db_session):
     assert good_resp["four_eyes_verified"] is True
 
 def test_partner_authority_boundary(db_session):
-    # Article Assistant tries to approve G7 Partner DSC Signing
+    # Article Assistant tries to approve G7 Partner Approval
     unauthorized_req = GateDecisionRequest(
         item_id="q01",
         gate_code="G7",
@@ -102,24 +100,6 @@ def test_high_value_transaction_threshold(db_session):
         decide_gate("G3", req_over_50k, db_session)
     assert exc_info.value.status_code == 403
     assert "Value Threshold Exceeded" in exc_info.value.detail
-
-def test_dsc_signing_ceremony(db_session):
-    # Invalid short PIN
-    with pytest.raises(HTTPException) as exc_info:
-        execute_dsc_signature(
-            DSCSigningRequest(item_id="q01", partner_id="srinivas", pin="123"),
-            db_session
-        )
-    assert exc_info.value.status_code == 400
-
-    # Valid PIN
-    valid_resp = execute_dsc_signature(
-        DSCSigningRequest(item_id="q01", partner_id="srinivas", pin="Pass1234!"),
-        db_session
-    )
-    assert valid_resp["status"] == "signed"
-    assert valid_resp["signature_token"].startswith("PKCS7-")
-    assert valid_resp["pin_memory_wiped"] is True
 
 def test_reconciliation_engine():
     data = run_reconciliation("c01", "2026-09")

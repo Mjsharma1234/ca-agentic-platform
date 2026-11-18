@@ -17,21 +17,13 @@ services:
         value: "false"
       - key: SECRET_KEY
         generateValue: true
-      - key: GSP_SIMULATION_MODE     # must be explicit in production; "true" only for demos
-        value: "true"
       - key: DATABASE_URL              # postgresql://ca_api:...?sslmode=require  (see db/provision_roles.sql)
         sync: false
       - key: DATABASE_ADMIN_URL        # postgresql://ca_owner:...  used only by `alembic upgrade head`
         sync: false
       - key: DB_APP_ROLE               # RLS role the API drops to; production refuses to boot on PostgreSQL without it
         value: ca_app
-      - key: SHARED_STORE_URL          # Redis; REQUIRED in production (shared rate limits / replay protection)
-        sync: false
-      - key: DSC_TRUSTED_CA_PEM        # PEM of the certifying authority that issues partner DSCs
-        sync: false
-      - key: PUBLIC_API_URL            # https URL of this service, e.g. https://ca-agentic-backend.onrender.com
-        sync: false
-      - key: PUBLIC_WEB_URL            # https URL of the web app
+      - key: SHARED_STORE_URL          # Redis; REQUIRED in production (shared rate limits / Firebase replay protection)
         sync: false
       - key: LOGIN_PROVIDER            # every login is a Firebase phone-OTP sign-in
         value: firebase
@@ -43,23 +35,5 @@ services:
         sync: false
       - key: BOOTSTRAP_ADMIN_PHONE     # +91XXXXXXXXXX: becomes the first Partner on first login only; remove afterwards
         sync: false
-      - key: DSC_REVOCATION_MODE
-        value: strict
       - key: CORS_ORIGINS              # JSON list of explicit origins; '*' is refused in production
         sync: false
-
-  - type: web
-    name: ca-agentic-frontend
-    runtime: node
-    rootDir: frontend
-    plan: free
-    buildCommand: npm install --legacy-peer-deps && npm run build
-    startCommand: npm start
-    envVars:
-      - key: NODE_VERSION
-        value: 20
-      - key: NEXT_PUBLIC_API_URL
-        fromService:
-          type: web
-          name: ca-agentic-backend
-          property: host

@@ -1,6 +1,6 @@
 """Small counter/once-only store shared by all workers when SHARED_STORE_URL (Redis) is set.
 
-Used for rate limits and DPoP proof replay protection. If Redis is not configured, or becomes
+Used for rate limits and Firebase token replay protection. If Redis is not configured, or becomes
 unreachable, it degrades to a per-process in-memory store and logs a warning - it never takes the
 API down. With several workers and no Redis, limits are per worker (documented in .env.example).
 """
@@ -85,7 +85,7 @@ class SharedStore:
                 # direct constructions and keeps the posture if that validator ever moves.
                 raise RuntimeError(
                     "SHARED_STORE_URL (Redis) is required when DEBUG is false: rate limits and "
-                    "replay protection must be shared across workers."
+                    "Firebase replay protection must be shared across workers."
                 )
             return cls()
         try:

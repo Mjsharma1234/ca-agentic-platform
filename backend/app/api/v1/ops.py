@@ -61,8 +61,6 @@ def _level(user: User) -> int:
 
 
 def staff_user(user: User = Depends(get_current_user)) -> User:
-    if user.scope == "signer":
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Not available to signer tokens.")
     if _level(user) < STAFF_LEVEL:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "The ops tracker is for firm staff only.")
     return user

@@ -1,7 +1,7 @@
 /* Bahi — Today, Daybook, The line, Statutory clock, Gates & approvals, obligation sheet. */
 
 /* ============ TODAY — the command centre ============ */
-const HOLD_ORDER = [['ok', 'Filed', s => s === 'closed'], ['code', 'At portal', s => s === 'filed'], ['gate', 'At gates', s => s === 'review' || s === 'sign'], ['agent', 'On autopilot', s => ['received', 'preparing', 'reconciled'].includes(s)], ['client', 'With client', s => s === 'awaiting'], ['line-2', 'Scheduled', s => s === 'scheduled']];
+const HOLD_ORDER = [['ok', 'Filed', s => s === 'closed'], ['code', 'Awaiting ack', s => s === 'filed'], ['gate', 'At gates', s => s === 'review' || s === 'sign'], ['agent', 'On autopilot', s => ['received', 'preparing', 'reconciled'].includes(s)], ['client', 'With client', s => s === 'awaiting'], ['line-2', 'Scheduled', s => s === 'scheduled']];
 function stackBar(items, legend = true) {
   const n = Math.max(1, items.length);
   const parts = HOLD_ORDER.map(([c, l, f]) => ({ c, l, k: items.filter(o => f(o.state)).length })).filter(p => p.k);
@@ -35,8 +35,6 @@ function buildAlerts() {
   if (silent.length) out.push({ k: 'client', ic: 'file', tag: 'Papers', title: `${silent.length} clients haven't sent papers due within 10 days`, body: silent.slice(0, 4).map(id => clientById(id).short).join(', ') + (silent.length > 4 ? ` and ${silent.length - 4} more` : ''), acts: [['Chase all now', () => { silent.forEach(id => ledgerAdd({ actor: 'IN-2', kind: 'agent', action: `sent an out-of-ladder reminder (asked by ${me().short})`, client: id, obj: 'Automation · Document request ladder' })); save(); toast(`Chaser sent ${silent.length} reminders, each in the client's language`, 'client', 'send'); }]] });
   const un = vis.filter(o => !o.prep && o.state !== 'closed');
   if (un.length) out.push({ k: 'warn', ic: 'users', tag: 'Ownership', title: `${un.length} obligations have no owner`, body: `${un.slice(0, 3).map(o => o.form).join(' · ')}${un.length > 3 ? ' …' : ''} · Capacity has a recommendation ready`, acts: [['Assign owners', () => autoAssign()]] });
-  const dsc = STATE.dscs.filter(d => (!d.client || canSeeClient(d.client)) && daysTo(d.expiry) <= 30);
-  if (dsc.length) out.push({ k: dsc.some(d => daysTo(d.expiry) < 0) ? 'bad' : 'warn', ic: 'key', tag: 'DSC', title: `${dsc.length} signature tokens expired or expiring in 30 days`, body: dsc.map(d => `${d.holder} (${daysTo(d.expiry) < 0 ? 'expired' : fmtD(d.expiry)})`).slice(0, 3).join(' · '), acts: [['Open the register', () => navTo('#/vault')]] });
   const nb = STATE.notices.filter(n => canSeeClient(n.client) && n.stage !== 'Replied' && daysTo(n.buffer) <= 3);
   if (nb.length) out.push({ k: 'bad', ic: 'alert', tag: 'Notices', title: `${nb.length} notice buffer dates within 3 days`, body: nb.map(n => `${n.type} · ${clientById(n.client).short}`).join(' · '), acts: [['Open notices', () => navTo('#/notices')]] });
   return out;
@@ -76,20 +74,7 @@ function teamLoad() {
   return `<div class="card"><div class="card-h"><h3>Team load<small>Open obligations each person prepares</small></h3><div class="right legend"><span><i class="sw" style="background:var(--ink-3)"></i>Preparing</span><span><i class="sw" style="background:var(--gate)"></i>With reviewer</span></div></div><div class="list">${ppl.map(p => `<div class="row">${avatar(p.t.id)}<div style="width:130px"><div class="t1">${esc(p.t.short)}</div><div class="t2">${ROLES[p.t.role].short}</div></div><div class="grow"><div class="stack" style="height:10px;width:${Math.max(6, 100 * p.n / mx)}%"><i style="flex:${p.n - p.rev};background:var(--ink-3)"></i><i style="flex:${p.rev};background:var(--gate)"></i></div></div><div style="text-align:right;width:92px"><div class="num small"><b>${p.n}</b> open</div><div class="tiny" style="color:${p.late ? 'var(--bad-ink)' : 'var(--ink-3)'}">${p.late ? p.late + ' overdue' : /leave/i.test(p.t.status) ? 'On leave' : p.n > 30 ? 'At capacity' : 'On track'}</div></div></div>`).join('')}</div></div>`;
 }
 function recentRuns() {
-  if (window.FIRM_OS_SIMULATE !== true) {
-    return `<div class="card"><div class="card-h"><h3>Autopilot · recent runs</h3><div class="right"><a class="btn xs" href="#/agents">Autopilot ${icon('arrow')}</a></div></div><div class="card-b"><div class="callout mb0" style="margin-bottom:0">${icon('info')}<div class="small"><b>No automated runs yet.</b> Background jobs (Tally sync, 2B reconciliation, due-date sync, bank feeds) are not connected. Run the reconciler or import a Tally trial balance by hand from <a href="#/recon">Reconciliation → Bank</a>.</div></div></div></div>`;
-  }
-  const gstC = STATE.obligations.filter(o => o.d === 'GST').map(o => o.client);
-  const ext = STATE.gates.find(g => g.ext);
-  const runs = [
-    ['09:10', 'Tally Prime export', `${new Set(STATE.obligations.filter(o => clientById(o.client).books.includes('Tally')).map(o => o.client)).size} clients · 1,286 classified vouchers written back to the client company files`, 'ok', 'Done'],
-    ['08:45', 'GSTR-3B payload builder', 'Deccan Pharma · tables 3.1, 3.2, 4, 5, 6 rebuilt and hashed; sent for review', 'gate', 'At G6'],
-    ['06:20', 'IMS triage', `${new Set(gstC).size} GST clients · invoices sorted; some still need a person's decision`, 'gate', 'Action'],
-    ['06:00', 'GSTR-2B reconciliation', 'Monthly GST clients · all 5 matching passes complete where registers are in', 'ok', 'Done'],
-    ['06:00', 'Due-date sync', `CBIC · CBDT · GSTN · MCA · EPFO · ESIC · ${ext && ext.status === 'pending' ? '1 change found, waiting for a partner' : 'no new notifications'}`, ext && ext.status === 'pending' ? 'gate' : 'code', ext && ext.status === 'pending' ? 'At G14' : 'No change'],
-    ['Yesterday 22:00', 'Bank feeds', '31 accounts via Account Aggregator · 4,112 lines matched', 'ok', 'Done']
-  ];
-  return `<div class="card"><div class="card-h"><h3>Autopilot · recent runs</h3><div class="right"><a class="btn xs" href="#/agents">Autopilot ${icon('arrow')}</a></div></div><div class="list">${runs.map(([t, n, d, c, s]) => `<div class="row" style="align-items:flex-start"><span class="mono tiny muted" style="width:62px;padding-top:2px">${t}</span><div class="grow"><div class="t1">${n}</div><div class="t2" style="white-space:normal">${d}</div></div><span class="chip ${c}">${s}</span></div>`).join('')}</div></div>`;
+  return `<div class="card"><div class="card-h"><h3>Autopilot · recent runs</h3><div class="right"><a class="btn xs" href="#/agents">Autopilot ${icon('arrow')}</a></div></div><div class="card-b"><div class="callout mb0" style="margin-bottom:0">${icon('info')}<div class="small"><b>No automated runs yet.</b> Background jobs (Tally sync, 2B reconciliation, due-date sync, bank feeds) are not connected. Run the reconciler or import a Tally trial balance by hand from <a href="#/recon">Reconciliation → Bank</a>.</div></div></div></div>`;
 }
 
 VIEWS.today = {
@@ -124,7 +109,7 @@ VIEWS.today = {
         <div class="upper" style="color:#A3A8B1">${DOW[TODAY.getDay()]}, ${fmtDY(TODAY)} · ${esc(FIRM.name)}</div>
         <h2 style="margin-top:8px">${greet}, ${esc(p.short)}. <em>${mine.length ? `${mine.length} decision${mine.length > 1 ? 's' : ''} wait for you.` : 'Nothing waits on you.'}</em></h2>
         <p>${late.length} past due · ${week.length} due this week · ${mine.length} waiting for your sign-off. Since 7 am autopilot has taken <b style="color:#fff">${autoActs}</b> actions, people <b style="color:#fff">${humanActs}</b>, clients <b style="color:#fff">${clientActs}</b> in the portal.</p>
-        <div class="flex wrap" style="gap:10px;margin-top:14px"><button class="btn sm" id="brief" style="background:rgba(255,255,255,.1);color:#F2F0EB;border-color:rgba(255,255,255,.22)">${icon('sun')} ${hr < 12 ? 'Your 9 o\'clock brief' : 'Today\'s brief'}</button><span class="sync-pill" id="sync-portal-dates" style="cursor:pointer" title="Click to trigger live sync with GSTN & Income Tax portals"><span class="dot" style="background:var(--ok)"></span>Due dates synced from CBIC, CBDT, GSTN, MCA, EPFO &amp; ESIC <b class="mono">Live Sync</b></span></div>
+        <div class="flex wrap" style="gap:10px;margin-top:14px"><button class="btn sm" id="brief" style="background:rgba(255,255,255,.1);color:#F2F0EB;border-color:rgba(255,255,255,.22)">${icon('sun')} ${hr < 12 ? 'Your 9 o\'clock brief' : 'Today\'s brief'}</button><button class="btn sm" id="sync-calendar" style="background:rgba(255,255,255,.1);color:#F2F0EB;border-color:rgba(255,255,255,.22)">${icon('refresh')} Refresh due dates</button></div>
       </div>
       <div class="hero-stats">
         <div class="hs"><b>${touchless}%</b><span>of today's firm actions on autopilot</span></div>
@@ -178,16 +163,10 @@ VIEWS.today = {
   mount(el) {
     bindGateRows(el); bindObRows(el); bindTasks(el); bindAlerts(el);
     $('#brief', el).onclick = openBrief;
-    const spd = $('#sync-portal-dates', el);
-    if (spd) spd.onclick = async () => {
-      if (typeof API_CLIENT !== 'undefined' && API_CLIENT.syncLiveStatutoryCalendar) {
-        const res = await API_CLIENT.syncLiveStatutoryCalendar();
-        if (res && res.portals) {
-          toast(`GSTN (${res.portals.gstn.online ? 'Online' : 'Active'}) & CBDT Handshake: ${res.total_deadlines_tracked} Dates Verified`, 'ok', 'globe');
-        }
-      } else {
-        toast('Live Handshake with GSTN & Income Tax Portal Successful', 'ok', 'globe');
-      }
+    const sc = $('#sync-calendar', el);
+    if (sc) sc.onclick = async () => {
+      const res = typeof API_CLIENT !== 'undefined' && API_CLIENT.syncLiveStatutoryCalendar ? await API_CLIENT.syncLiveStatutoryCalendar() : null;
+      if (!res) toast('Due dates are as per the rulebook in this workspace', 'agent', 'calendar');
     };
     $$('[data-rwday]', el).forEach(b => b.onclick = () => { CAL.sel = b.dataset.rwday; const d = new Date(b.dataset.rwday + 'T00:00:00'); CAL.y = d.getFullYear(); CAL.m = d.getMonth(); navTo('#/calendar'); });
   }
@@ -195,7 +174,7 @@ VIEWS.today = {
 
 function gateRow(g) {
   const allowed = gateAllowed(g); const c = g.client ? clientById(g.client) : null;
-  return `<div class="row click" data-gate="${g.id}">${gateSeal(g.gate)}<div class="grow"><div class="t1">${esc(g.title)}</div><div class="t2">${c ? esc(c.short) + ' · ' : g.newClient ? esc(g.newClient) + ' · ' : ''}${agentByCode(g.prep) ? 'from ' + esc(actorName(g.prep)) : 'by ' + esc(actorName(g.prep) || '—')} · ${ago(g.created)}${g.amount ? ' · ' + inr(g.amount) : ''}</div></div><span class="chip outline hide-md" title="Checks">${icon('checkCircle')}${esc(gateChecks(g))}</span>${dueChip(g.due)}${allowed.ok ? `<button class="btn gate sm" data-approve="${g.id}">${g.gate === 'G7' ? 'Sign' : g.gate === 'G8' ? 'UDIN' : 'Review'}</button>` : `<span class="chip outline" title="${esc(allowed.why)}">${icon('lock')}Locked</span>`}</div>`;
+  return `<div class="row click" data-gate="${g.id}">${gateSeal(g.gate)}<div class="grow"><div class="t1">${esc(g.title)}</div><div class="t2">${c ? esc(c.short) + ' · ' : g.newClient ? esc(g.newClient) + ' · ' : ''}${agentByCode(g.prep) ? 'from ' + esc(actorName(g.prep)) : 'by ' + esc(actorName(g.prep) || '—')} · ${ago(g.created)}${g.amount ? ' · ' + inr(g.amount) : ''}</div></div><span class="chip outline hide-md" title="Checks">${icon('checkCircle')}${esc(gateChecks(g))}</span>${dueChip(g.due)}${allowed.ok ? `<button class="btn gate sm" data-approve="${g.id}">${g.gate === 'G7' ? 'Sign off' : g.gate === 'G8' ? 'Release' : 'Review'}</button>` : `<span class="chip outline" title="${esc(allowed.why)}">${icon('lock')}Locked</span>`}</div>`;
 }
 function obRow(o) {
   const c = clientById(o.client); const s = stateOf(o.state);
@@ -361,8 +340,18 @@ function rejectObligation(o) {
     onMount: el => { el.querySelector('[data-x]').onclick = () => closeModal(); el.querySelector('[data-ok]').onclick = () => { const why = $('#rj').value.trim(); if (!why) { $('#rj').classList.add('shake'); setTimeout(() => $('#rj').classList.remove('shake'), 500); return; } o.state = 'preparing'; o.returned = { by: me().id, note: why, at: new Date().toISOString() }; ledgerAdd({ actor: me().id, kind: 'human', action: `requested changes — “${why}”`, client: o.client, obj: o.form + ' · ' + o.period }); save(); closeModal(); closeSheet(); toast('Sent back to ' + actorName(o.prep), 'warn', 'undo'); rerender(); }; } });
 }
 function captureAck(o) {
-  toast('FL-1 polling the portal…', 'agent', 'refresh');
-  setTimeout(() => { o.state = 'closed'; o.ack = (o.d === 'GST' ? 'AA36' : 'ACK') + String(Math.floor(Math.random() * 1e12)).padStart(12, '0'); ledgerAdd({ actor: 'FL-1', kind: 'agent', action: `captured acknowledgement ${o.ack}`, client: o.client, obj: o.form + ' · ' + o.period }); save(); toast(`Acknowledged · ${o.ack} — client notified automatically`, 'ok', 'check'); closeSheet(); rerender(); }, 1100);
+  openModal({ html: `<div class="modal-b"><div class="upper muted">Record the acknowledgement</div><h2>${esc(o.form)} · ${esc(clientById(o.client).short)}</h2><p class="dim small">After filing on the portal, type or paste the acknowledgement number it gave you. The filing closes once it is in the record.</p><div class="field mt12"><label>Acknowledgement number</label><input class="input mono" id="ack-no" autocomplete="off" placeholder="As shown on the portal"></div><div class="flex mt16" style="justify-content:flex-end"><button class="btn ghost" data-x>Cancel</button><button class="btn primary" data-ok>${icon('check')} Record &amp; close</button></div></div>`,
+    onMount: el => {
+      el.querySelector('[data-x]').onclick = () => closeModal();
+      el.querySelector('[data-ok]').onclick = () => {
+        const v = $('#ack-no', el).value.trim();
+        if (!v) { $('#ack-no', el).classList.add('shake'); setTimeout(() => $('#ack-no', el).classList.remove('shake'), 500); return; }
+        o.state = 'closed'; o.ack = v;
+        ledgerAdd({ actor: me().id, kind: 'human', action: `recorded acknowledgement ${v}`, client: o.client, obj: o.form + ' · ' + o.period });
+        save(); closeModal(); closeSheet(); toast(`Closed · acknowledgement ${v} recorded`, 'ok', 'check'); rerender();
+      };
+      setTimeout(() => $('#ack-no', el).focus(), 50);
+    } });
 }
 
 /* ============ OBLIGATION SHEET ============ */
@@ -377,8 +366,8 @@ function openObligation(id) {
     preparing: `<button class="btn agent" data-a="next">${icon('arrow')} Mark reconciled</button>`,
     reconciled: `<button class="btn agent" data-a="next">${icon('arrow')} Submit for review</button>`,
     review: `<button class="btn danger" data-a="reject">${icon('undo')} Send back</button><button class="btn gate" data-a="gate">${icon('stamp')} Review · G6</button>`,
-    sign: `<button class="btn danger" data-a="reject">${icon('undo')} Send back</button><button class="btn gate" data-a="gate">${icon('pen')} Sign with DSC · G7</button>`,
-    filed: `<button class="btn" data-a="ack">${icon('refresh')} Poll portal for acknowledgement</button>`,
+    sign: `<button class="btn danger" data-a="reject">${icon('undo')} Send back</button><button class="btn gate" data-a="gate">${icon('stamp')} Partner sign-off · G7</button>`,
+    filed: `<button class="btn" data-a="ack">${icon('check')} Record acknowledgement</button>`,
     closed: `<button class="btn" data-a="sendack">${icon('send')} Send acknowledgement to client · G12</button>`
   }[o.state];
   openSheet({
@@ -517,10 +506,10 @@ VIEWS.gates = {
     const sec = (title, sub, items, empty) => `<div class="card mb16"><div class="card-h"><h3>${title} <span class="chip gate" style="margin-left:6px">${items.length}</span><small>${sub}</small></h3></div><div class="list">${items.map(g => gateRow(g)).join('') || `<div class="empty small" style="margin:12px">${empty}</div>`}</div></div>`;
     const grouped = GATE_F === 'mine'
       ? sec('Waiting for your review', 'Four-eyes (G6) — approve, or send back with a note', list.filter(g => g.gate === 'G6'), 'Nothing waiting for your review.')
-        + sec('Approved · waiting for your DSC', 'G7 signature and G8 UDIN — plug in your Class-3 token', list.filter(g => ['G7', 'G8'].includes(g.gate)), 'Nothing waiting for your signature.')
+        + sec('Approved · waiting for your sign-off', 'G7 partner sign-off and G8 report release', list.filter(g => ['G7', 'G8'].includes(g.gate)), 'Nothing waiting for your signature.')
         + sec('Other decisions', 'Credit calls, invoices, clients, rules, documents out', list.filter(g => !['G6', 'G7', 'G8'].includes(g.gate)), 'No other decisions waiting.')
       : `<div class="card"><div class="list">${list.map(g => gateRow(g)).join('') || `<div class="empty">${icon('checkCircle')}<p>Nothing here.</p></div>`}</div></div>`;
-    return pageHead('Gates · where the work stops until a named person acts', 'Gates & <em>approvals</em>', 'Autopilot proposes; people decide. Nothing reaches a government portal until a second person has checked it and a partner has signed it with their DSC. There is no bulk-approve, by design: Quality check plants known-defective items to make sure reviewers still read.') + `
+    return pageHead('Gates · where the work stops until a named person acts', 'Gates & <em>approvals</em>', 'Autopilot proposes; people decide. Nothing is filed until a second person has checked it and a partner has signed it off. There is no bulk-approve, by design: Quality check plants known-defective items to make sure reviewers still read.') + `
     <div class="grid g4 mb16">
       ${[['Waiting for you', q.filter(g => gateAllowed(g).ok).length, 'gate'], ['Partner-only', q.filter(g => GATES[g.gate].partner).length, 'gate'], ['Due today or late', q.filter(g => daysTo(g.due) <= 0).length, 'warn'], ['Decided this session', STATE.gates.filter(g => g.status !== 'pending').length, 'ok']].map(([l, n, c]) => `<div class="card kpi accent-${c}"><div class="label">${l}</div><div class="value">${n}</div></div>`).join('')}
     </div>
@@ -542,7 +531,7 @@ function findGateItem(id) { return gateQueue().find(g => g.id === id) || STATE.g
 function openApproval(id) {
   const g = findGateItem(id); if (!g) return toast('That item has already been decided', 'ok', 'check');
   const G = GATES[g.gate]; const allowed = gateAllowed(g); const c = g.client ? clientById(g.client) : null;
-  const special = g.gate === 'G7' ? 'Sign with DSC' : g.gate === 'G8' ? 'Generate UDIN' : g.gate === 'G3' ? 'Commit decisions' : g.gate === 'G12' ? 'Send' : g.gate === 'G13' ? 'Accept client' : g.gate === 'G18' ? 'Resign engagement' : 'Approve';
+  const special = g.gate === 'G7' ? 'Sign off' : g.gate === 'G8' ? 'Release report' : g.gate === 'G3' ? 'Commit decisions' : g.gate === 'G12' ? 'Send' : g.gate === 'G13' ? 'Accept client' : g.gate === 'G18' ? 'Resign engagement' : 'Approve';
   openSheet({
     title: `${gateSeal(g.gate)} <span style="margin-left:8px">${esc(g.title)}</span>`, sub: `${esc(G.n)} · ${esc(G.who)}${c ? ' · ' + esc(c.name) : g.newClient ? ' · ' + esc(g.newClient) : ''}`, wide: true,
     body: `
@@ -552,7 +541,7 @@ function openApproval(id) {
       <div class="card mt16"><div class="card-h"><h3>Evidence pack<small>Check the citation, not the reasoning</small></h3></div><div class="list">${(g.ev || []).map((e, i) => `<div class="row" style="min-height:46px"><span class="num tiny muted" style="width:18px">${i + 1}</span><div class="grow small">${esc(e)}</div><span class="chip outline">${icon('link')}source</span></div>`).join('')}</div></div>
       ${g.gate === 'G3' ? `<div class="callout agent mt16">${icon('scale')}<div>The invoice-by-invoice proposals are on the <a href="#/recon">Reconciliation → IMS triage</a> screen, where you can change any proposal before committing.</div></div>` : ''}
       <div class="field mt16"><label>Your note (written to the record)${['G14', 'G11', 'G18'].includes(g.gate) ? ' — required: write the reasoning down today' : ''}</label><textarea class="input" id="gate-note" placeholder="Optional for most gates"></textarea></div>`,
-    foot: allowed.ok ? `<button class="btn danger" data-rej>${icon('undo')} Reject</button><button class="btn gate" data-ok>${icon(g.gate === 'G7' ? 'pen' : 'stamp')} ${special}</button>` : `<span class="small muted">Switch person (top right) to someone who holds this gate.</span><button class="btn" data-x>Close</button>`,
+    foot: allowed.ok ? `<button class="btn danger" data-rej>${icon('undo')} Reject</button><button class="btn gate" data-ok>${icon('stamp')} ${special}</button>` : `<span class="small muted">Switch person (top right) to someone who holds this gate.</span><button class="btn" data-x>Close</button>`,
     onMount: el => {
       const note = () => $('#gate-note', el).value.trim();
       const needNote = ['G14', 'G11', 'G18'].includes(g.gate);
@@ -560,8 +549,6 @@ function openApproval(id) {
       el.querySelector('[data-rej]') && (el.querySelector('[data-rej]').onclick = () => { if (!note()) { $('#gate-note', el).classList.add('shake'); $('#gate-note', el).placeholder = 'A rejection needs a reason'; setTimeout(() => $('#gate-note', el).classList.remove('shake'), 500); return; } resolveGate(g, false, note()); });
       el.querySelector('[data-ok]') && (el.querySelector('[data-ok]').onclick = () => {
         if (needNote && !note()) { $('#gate-note', el).classList.add('shake'); setTimeout(() => $('#gate-note', el).classList.remove('shake'), 500); return toast('Write the reasoning down — this gate requires it', 'warn', 'pen'); }
-        if (g.gate === 'G7') return pinPad(g, note());
-        if (g.gate === 'G8') return udinFlow(g, note());
         resolveGate(g, true, note());
       });
     }
@@ -575,7 +562,6 @@ function resolveGate(g, ok, note) {
       if (!ok) o.state = 'preparing';
       else if (g.gate === 'G6') o.state = o.mode === 'int' ? 'closed' : 'sign';
       else if (g.gate === 'G7') { o.state = o.mode === 'int' ? 'closed' : 'filed'; o.filedAt = new Date().toISOString(); }
-      if (ok && g.gate === 'G7') { const c = clientById(o.client); if (o.mode === 'api') setTimeout(() => { if (o.state === 'filed') { o.state = 'closed'; o.ack = (o.d === 'GST' ? 'AA36' : 'ACK') + String(Math.floor(Math.random() * 1e12)).padStart(12, '0'); ledgerAdd({ actor: 'FL-1', kind: 'agent', action: `captured acknowledgement ${o.ack} · client told automatically`, client: o.client, obj: o.form + ' · ' + o.period }); save(); toast(`FL-1: ${o.form} for ${c.short} acknowledged — ${o.ack}`, 'ok', 'check'); updateCounts(); } }, 5000); }
     }
   } else {
     const it = STATE.gates.find(x => x.id === g.id);
@@ -588,51 +574,6 @@ function resolveGate(g, ok, note) {
   save(); closeModal(true); closeSheet();
   toast(`${g.gate} ${verb} · ${g.title}`, ok ? 'gate' : 'warn', ok ? 'stamp' : 'undo');
   updateCounts(); rerender();
-}
-function pinPad(g, note) {
-  let pin = '';
-  const m = openModal({
-    html: `<div class="modal-b" style="text-align:center"><div class="upper muted">G7 · the signature</div><h2>Enter your DSC PIN</h2><p class="small dim">${esc(g.title)} · ${esc(clientById(g.client)?.name || '')}</p>
-      <div class="pin-dots" id="dots">${[...Array(6)].map(() => '<i></i>').join('')}</div>
-      <div class="pinpad">${[1, 2, 3, 4, 5, 6, 7, 8, 9, '', 0, '⌫'].map(k => k === '' ? '<span></span>' : `<button data-k="${k}">${k}</button>`).join('')}</div>
-      <p class="tiny muted mt16">${icon('lock').replace('<svg', '<svg width="12" height="12"')} Held in memory for seconds and never stored. Nothing automated can reach this screen.</p>
-      <button class="btn ghost sm mt8" data-x>Cancel</button></div>`,
-    onMount: el => {
-      const draw = () => $$('#dots i', el).forEach((d, i) => d.classList.toggle('on', i < pin.length));
-      const press = k => {
-        if (k === '⌫') pin = pin.slice(0, -1); else if (pin.length < 6) pin += k;
-        draw();
-        if (pin.length === 6) setTimeout(() => {
-          el.querySelector('.modal-b').innerHTML = `<div class="upper muted">Signed</div><div class="seal-anim">SIGNED<br>DSC<br>${esc(me().short.toUpperCase())}</div><p class="small dim">PIN discarded. Signature applied to the payload; ${['api'].includes(STATE.obligations.find(o => 'ob:' + o.id === g.id)?.mode) ? 'submitting by interface — FL-1 will wait for the acknowledgement.' : 'the pack is ready for filing.'}</p>`;
-          pin = '';
-          setTimeout(() => resolveGate(g, true, note), 1300);
-        }, 150);
-      };
-      $$('[data-k]', el).forEach(b => b.onclick = () => press(b.dataset.k));
-      el.querySelector('[data-x]').onclick = () => { pin = ''; closeModal(); };
-      el._key = e => { if (/^\d$/.test(e.key)) press(e.key); if (e.key === 'Backspace') press('⌫'); };
-      document.addEventListener('keydown', el._key);
-      const obs = new MutationObserver(() => { if (!document.body.contains(el)) { document.removeEventListener('keydown', el._key); obs.disconnect(); } });
-      obs.observe(document.body, { childList: true });
-    }
-  });
-}
-function udinFlow(g, note) {
-  const mno = me().mno || '000000';
-  const udin = String(TODAY.getFullYear()).slice(2) + mno + Array.from({ length: 6 }, () => 'ABCDEFGHJKLMNPQRSTUVWXYZ'[Math.floor(Math.random() * 24)]).join('') + String(Math.floor(1000 + Math.random() * 8999));
-  openModal({
-    html: `<div class="modal-b"><div class="upper muted">G8 · human-started</div><h2>Generate UDIN</h2><p class="small dim">ICAI requires the member to generate the UDIN personally. CA Firm OS has prepared every field; you start it.</p>
-      <dl class="kv mt12"><dt>Member</dt><dd>${esc(me().name)} · M.No ${esc(mno)}</dd><dt>Document</dt><dd>${esc(g.title)}</dd><dt>Client</dt><dd>${esc(clientById(g.client)?.name || '')}</dd><dt>Key figures</dt><dd>Prepared from the signed report</dd></dl>
-      <div id="udin-out" class="mt16"></div>
-      <div class="flex mt16" style="justify-content:flex-end"><button class="btn ghost" data-x>Cancel</button><button class="btn gate" data-go>${icon('globe')} Open ICAI UDIN portal &amp; generate</button></div></div>`,
-    onMount: el => {
-      el.querySelector('[data-x]').onclick = () => closeModal();
-      el.querySelector('[data-go]').onclick = e => {
-        e.target.disabled = true; $('#udin-out', el).innerHTML = `<div class="pipe"><span class="ps run">OTP to member's mobile</span></div>`;
-        setTimeout(() => { $('#udin-out', el).innerHTML = `<div class="callout gate"><div><div class="tiny upper">UDIN generated by ${esc(me().short)}</div><div class="mono" style="font-size:20px;letter-spacing:.06em;margin-top:4px">${udin}</div><div class="tiny">Recorded against the report. FL-1 will check it appears on the filed form.</div></div></div>`; e.target.outerHTML = `<button class="btn gate" data-done>${icon('check')} Record &amp; close</button>`; el.querySelector('[data-done]').onclick = () => resolveGate(g, true, (note ? note + ' · ' : '') + 'UDIN ' + udin); }, 1400);
-      };
-    }
-  });
 }
 
 
