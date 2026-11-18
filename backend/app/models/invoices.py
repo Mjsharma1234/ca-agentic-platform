@@ -1,6 +1,6 @@
 import uuid
 from decimal import Decimal
-from sqlalchemy import Column, String, Boolean, Enum, Numeric, ForeignKey, Integer, Float
+from sqlalchemy import Column, String, Boolean, Enum, Numeric, ForeignKey, Integer, Float, Index, text
 import enum
 
 from .base import BaseModel, SoftDeleteMixin, UUID, JSONB
@@ -34,6 +34,16 @@ class InvoiceStatus(str, enum.Enum):
 
 class Invoice(BaseModel, SoftDeleteMixin):
     __tablename__ = "invoices"
+    __table_args__ = (
+        # One row per ERP voucher per client: the Tally agent upserts on this reference.
+        Index(
+            "uq_invoices_client_external_ref", "tenant_id", "client_id", "external_ref", unique=True,
+            postgresql_where=text("external_ref IS NOT NULL"),
+            sqlite_where=text("external_ref IS NOT NULL"),
+        ),
+    )
+
+    external_ref = Column(String(64), nullable=True)  # ERP voucher id (Tally GUID) for ERP_SYNC rows
 
     client_id = Column(UUID(as_uuid=True), ForeignKey("clients.id"), nullable=False, index=True)
     gstin = Column(String(15), nullable=False, index=True)
