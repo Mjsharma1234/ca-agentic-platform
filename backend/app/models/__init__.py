@@ -10,3 +10,5 @@ from .tenant import Firm, User, AuditBlock, FirmConstitution, PlanTier, UserRole
 from .otp import OTPRecord
 from .ops import OpsStaff, OpsObligation, OpsTask, OpsNotice, OpsTimesheet, OpsFeeInvoice, OpsDaybookEntry, OpsSettings
 from .billing import FirmBillingInvoice
+
+from .tally_agent import TallyAgent, TallyCompany

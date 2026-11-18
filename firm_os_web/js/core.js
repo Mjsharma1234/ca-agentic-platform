@@ -432,6 +432,7 @@ const PAGES = [
   { k: 'quality', n: 'Quality review', i: 'checkCircle', g: 'Firm' },
   { k: 'agents', n: 'Autopilot', i: 'hex', g: 'Machine' },
   { k: 'connectors', n: 'Connectors', i: 'plug', g: 'Machine' },
+  { k: 'tally', n: 'Tally sync', i: 'plug', g: 'Machine' },
   { k: 'rulebook', n: 'Rulebook', i: 'scroll', g: 'Machine' },
   { k: 'record', n: 'The record', i: 'chain', g: 'Machine', cap: 'ledger' },
   { k: 'access', n: 'Access & roles', i: 'shield', g: 'Machine' }
