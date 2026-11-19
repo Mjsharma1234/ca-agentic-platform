@@ -3,7 +3,9 @@
    API base resolution (first match wins):
      1. window.FIRM_OS_API_BASE (set in a <script> before this file)
      2. localStorage 'bahi_api_base'  (e.g. https://your-backend.onrender.com/api/v1)
-     3. same origin when served by the backend on :8000
+     3. same origin when served by the backend: on :8000 (local), or on a *.onrender.com address
+        (the Render service serves this web app itself). A custom domain or any other host
+        (e.g. the Vercel copy) must use option 1 or 2.
      4. http://127.0.0.1:8000/api/v1 (local development) */
 
 const API_BASE = (() => {
@@ -12,7 +14,8 @@ const API_BASE = (() => {
     const saved = localStorage.getItem('bahi_api_base');
     if (saved) return saved.replace(/\/$/, '');
   } catch (e) { /* storage blocked */ }
-  if (window.location.origin && window.location.origin.includes(':8000')) return `${window.location.origin}/api/v1`;
+  const loc = window.location;
+  if (loc.origin && (loc.origin.includes(':8000') || /\.onrender\.com$/i.test(loc.hostname))) return `${loc.origin}/api/v1`;
   return 'http://127.0.0.1:8000/api/v1';
 })();
 
