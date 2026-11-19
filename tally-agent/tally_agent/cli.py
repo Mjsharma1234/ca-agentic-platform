@@ -8,8 +8,9 @@ import time
 from datetime import date
 from pathlib import Path
 
-from . import __version__
-from .config import Config, ConfigError, config_dir, load, save, validate_server_url
+from . import __version__, autostart
+from .config import Config, ConfigError, config_dir, default_server, load, save, validate_server_url
+from .pairing import PairingError, pair
 from .sync import financial_year, run_sync
 from .tally_client import TallyClient, TallyError
 from .uploader import ServerRejected, ServerUnavailable, Uploader
@@ -25,7 +26,8 @@ def _setup_logging() -> None:
     root = logging.getLogger("tally_agent")
     root.setLevel(logging.INFO)
     root.addHandler(handler)
-    root.addHandler(logging.StreamHandler(sys.stdout))
+    if sys.stdout is not None:   # a windowless build has no console
+        root.addHandler(logging.StreamHandler(sys.stdout))
 
 
 def _clients(cfg: Config):
@@ -46,6 +48,75 @@ def cmd_setup(args) -> int:
         return 1
     print(f"Settings saved to {save(cfg)}")
     print("Next: run 'firmos-tally-agent check', then ask a manager to link your Tally company to a client in Firm OS.")
+    return 0
+
+
+def _first_sync(cfg: Config) -> int:
+    tally, up = _clients(cfg)
+    report = run_sync(tally, up, cfg.financial_years, cfg.fetch_all_voucher_types, log=log.info)
+    print("First sync:", report.summary())
+    return 0 if report.ok else 1
+
+
+def _connect(server: str, tally_url: str, open_browser: bool, want_autostart: bool) -> int:
+    """Pairs this PC with a firm, saves the key, optionally starts at login, then syncs once straight away."""
+    try:
+        names = TallyClient(tally_url).list_companies()
+    except TallyError as e:
+        names = []
+        print(f"Note: {e}")
+        print("Continuing anyway; open Tally before the first sync.")
+    try:
+        key = pair(server, names, open_browser=open_browser)
+    except PairingError as e:
+        print(e)
+        return 1
+    cfg = Config(server_url=server, agent_key=key, tally_url=tally_url).validate()
+    print(f"Connected. Settings saved to {save(cfg)}")
+    if want_autostart and sys.platform == "win32":
+        try:
+            autostart.enable()
+            print("The agent will now start by itself when you log in to Windows (turn off with: autostart off).")
+        except OSError as e:
+            print(f"Could not set up start at login ({e}); run the agent yourself after a restart.")
+    return _first_sync(cfg)
+
+
+def cmd_connect(args) -> int:
+    server = validate_server_url(args.server or default_server())
+    return _connect(server, args.tally_url, not args.no_browser, not args.no_autostart)
+
+
+def cmd_auto(_args) -> int:
+    """What happens when the program is simply started: pair if needed, then keep syncing."""
+    try:
+        cfg = load()
+        try:
+            Uploader(cfg.server_url, cfg.agent_key).heartbeat([])
+        except ServerRejected as e:
+            if e.status != 401:
+                raise
+            print("This PC's connection was removed in Firm OS. Pairing again...")
+            return _connect(cfg.server_url, cfg.tally_url, True, True) or cmd_run(None)
+        except ServerUnavailable:
+            pass   # Firm OS asleep or offline: the sync loop retries
+    except ConfigError:
+        code = _connect(default_server(), "http://localhost:9000", True, True)
+        if code not in (0,):
+            return code
+    return cmd_run(None)
+
+
+def cmd_autostart(args) -> int:
+    if sys.platform != "win32":
+        print("Starting at login is only supported on Windows.")
+        return 1
+    if args.mode == "on":
+        print("Will run at login:", autostart.enable())
+    elif args.mode == "off":
+        print("Removed from startup." if autostart.disable() else "It was not set to start at login.")
+    else:
+        print(autostart.status() or "Not set to start at login.")
     return 0
 
 
@@ -109,9 +180,19 @@ def cmd_tray(_args) -> int:
 
 
 def main(argv=None) -> int:
-    p = argparse.ArgumentParser(prog="firmos-tally-agent", description="Sends Tally purchase registers to Firm OS (read-only).")
+    p = argparse.ArgumentParser(prog="firmos-tally-agent", description="Sends Tally purchase registers to Firm OS (read-only). Run with no command to connect and start syncing.")
     p.add_argument("--version", action="version", version=__version__)
-    sub = p.add_subparsers(dest="cmd", required=True)
+    sub = p.add_subparsers(dest="cmd", required=False)
+    p.set_defaults(fn=cmd_auto)
+    c = sub.add_parser("connect", help="pair this PC with your firm in Firm OS (opens your browser)")
+    c.add_argument("--server")
+    c.add_argument("--tally-url", default="http://localhost:9000")
+    c.add_argument("--no-browser", action="store_true", help="print the link instead of opening it")
+    c.add_argument("--no-autostart", action="store_true", help="do not start the agent when Windows starts")
+    c.set_defaults(fn=cmd_connect)
+    a = sub.add_parser("autostart", help="start the agent at Windows login")
+    a.add_argument("mode", choices=["on", "off", "status"])
+    a.set_defaults(fn=cmd_autostart)
     s = sub.add_parser("setup", help="save the Firm OS address and agent key")
     s.add_argument("--server")
     s.add_argument("--key")
@@ -133,6 +214,8 @@ def main(argv=None) -> int:
     except ConfigError as e:
         print(e)
         return 2
+    except KeyboardInterrupt:
+        return 130
     except TallyError as e:
         print(e)
         return 1

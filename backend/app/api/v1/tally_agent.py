@@ -11,6 +11,7 @@ soft-deleted, so edits and deletions made in Tally carry through. The agent neve
 import gzip  # noqa: F401  (documented wire format)
 import hashlib
 import json
+import re
 import secrets
 import uuid
 import zlib
@@ -141,6 +142,7 @@ def _company_public(c: TallyCompany, agent_name: str = "") -> Dict[str, Any]:
     return {
         "id": str(c.id), "company_name": c.company_name, "agent_id": str(c.agent_id), "agent_name": agent_name,
         "client_id": str(c.client_id) if c.client_id else None, "linked": c.client_id is not None,
+        "link_method": c.link_method,
         "last_synced_at": c.last_synced_at.isoformat() if c.last_synced_at else None,
         "last_period_from": c.last_period_from, "last_period_to": c.last_period_to,
         "last_voucher_count": c.last_voucher_count, "last_error": c.last_error,
@@ -184,6 +186,7 @@ def link_company(company_id: str, body: LinkBody, user: Manager, db: Session = D
             # Two companies writing one client's register would soft-delete each other's vouchers.
             raise HTTPException(status_code=409, detail=f"That client is already linked to Tally company '{other.company_name}'.")
         company.client_id = cid
+    company.link_method = "manual" if body.client_id is not None else None
     company.last_error = None
     _audit(db, user.tenant_id, str(user.id), user.role, "TALLY_COMPANY_LINKED", str(company.id),
            {"company": company.company_name, "client_id": body.client_id})
@@ -211,6 +214,34 @@ def _get_or_create_company(db: Session, agent: TallyAgent, name: str) -> TallyCo
     return company
 
 
+def _norm_name(value: Optional[str]) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", (value or "").lower()).strip()
+
+
+def _try_auto_link(db: Session, agent: TallyAgent, company: TallyCompany) -> bool:
+    """Links a Tally company to a client when its name EXACTLY matches one client's name (ignoring case and
+    punctuation) and that client has no Tally company yet. Anything less certain is left for a person, because a
+    wrong link would put one client's purchases into another client's register."""
+    wanted = _norm_name(company.company_name)
+    if not wanted:
+        return False
+    clients = db.execute(
+        select(Client).where(Client.tenant_id == agent.tenant_id, Client.is_deleted.is_(False))
+    ).scalars().all()
+    matches = [c for c in clients if wanted in (_norm_name(c.client_name), _norm_name(c.trade_name))]
+    if len(matches) != 1:
+        return False
+    taken = db.execute(
+        select(TallyCompany.id).where(TallyCompany.tenant_id == agent.tenant_id, TallyCompany.client_id == matches[0].id)
+    ).first()
+    if taken is not None:
+        return False
+    company.client_id, company.link_method, company.last_error = matches[0].id, "auto", None
+    _audit(db, agent.tenant_id, str(agent.id), "SYSTEM", "TALLY_COMPANY_AUTO_LINKED", str(company.id),
+           {"company": company.company_name, "client_id": str(matches[0].id)})
+    return True
+
+
 @router.post("/heartbeat")
 def heartbeat(body: Heartbeat, agent: Agent, db: Session = Depends(get_db)):
     """Tells the firm the agent is alive and which Tally companies are open, and tells the agent which are linked."""
@@ -222,6 +253,8 @@ def heartbeat(body: Heartbeat, agent: Agent, db: Session = Depends(get_db)):
         if len(name) > 250:
             continue
         company = _get_or_create_company(db, agent, name)
+        if company.client_id is None:
+            _try_auto_link(db, agent, company)
         out.append({"company_name": name, "linked": company.client_id is not None})
     db.commit()
     return {"ok": True, "companies": out}

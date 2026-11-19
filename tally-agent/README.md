@@ -4,19 +4,21 @@ A small program that runs on the PC where Tally is installed. It reads the **pur
 (read-only) and sends it to Firm OS over HTTPS, where it feeds GSTR-2B reconciliation. It never writes to Tally,
 and Tally's port is never exposed to the internet: the agent only makes outbound connections.
 
-## Set up (once per Tally PC)
+## Connect a PC (automatic)
 
-1. **In Firm OS (manager):** `POST /api/v1/tally-agent/agents` with a name such as "Reception PC". Copy the key (`fosk_...`); it is shown once.
-2. **In Tally:** F1 (Help) > Settings > Connectivity > Client/Server configuration: set TallyPrime to act as *Both* (or *Server*), port **9000**. Open the client's company.
-3. **On the PC:**
-   ```
-   pip install .            (or use the built FirmOSTallyAgent.exe)
-   firmos-tally-agent setup
-   firmos-tally-agent check
-   ```
-   `check` lists the open Tally companies and whether each is linked.
-4. **In Firm OS (manager):** `GET /api/v1/tally-agent/companies`, then `PUT /api/v1/tally-agent/companies/{id}/link` with the client's id. Until a company is linked the agent reports "waiting for link" and sends nothing.
-5. `firmos-tally-agent sync` for one pass, or `firmos-tally-agent run` / `tray` to keep syncing every hour (change `interval_minutes` in the settings file).
+1. **In Tally:** F1 (Help) > Settings > Connectivity > Client/Server configuration: set TallyPrime to act as *Both* (or *Server*), port **9000**. Open the client's company.
+2. **Start the agent** on that PC (double-click `FirmOSTallyAgent.exe`, or run `firmos-tally-agent`). It opens Firm OS in the browser with a short code.
+3. **A manager or partner, signed in to Firm OS, checks the code matches the one on the PC and clicks Approve.** This one click is deliberate: without it, anyone could attach any PC to any firm.
+
+That is all. The agent receives its own key (nothing to copy), syncs straight away, keeps syncing every hour, and starts again when Windows starts
+(`firmos-tally-agent autostart off` turns that off). Each Tally company links itself to the client whose name matches it **exactly**
+(ignoring case and punctuation); anything else shows "Pick a client" on the Tally sync page and is linked by hand.
+The agent connects to `https://ca-agentic-platform.onrender.com` unless `FIRMOS_SERVER` is set. If Render's free plan is asleep, the first
+connection can take about a minute; the agent waits and retries.
+
+If a manager disconnects the PC in Firm OS, start the agent again and approve it again.
+
+**Advanced / no browser on the PC:** a manager can issue a key by hand on the Tally sync page, then run `firmos-tally-agent setup` and paste it.
 
 Settings live in `%APPDATA%\FirmOSTallyAgent\config.json`; the key is encrypted with Windows DPAPI. The log is `agent.log` beside it.
 
@@ -31,7 +33,10 @@ stored vouchers, Firm OS refuses to wipe them and the agent reports it.
 
 | Command | Does |
 |---|---|
-| `setup` | Saves the Firm OS address and key after checking the key works |
+| *(no command)* | Connects if needed (opens the browser), then keeps syncing |
+| `connect` | Pairs this PC with your firm; `--no-browser` prints the link instead, `--no-autostart` skips start-at-login |
+| `autostart on/off/status` | Starts the agent when this Windows user logs in (per-user registry Run key, no admin rights) |
+| `setup` | Saves the Firm OS address and a hand-issued key after checking it works |
 | `check` | Tests Tally and Firm OS and lists company link status |
 | `sync` | One sync now |
 | `run` | Syncs on a timer (for a scheduled task) |
@@ -40,7 +45,7 @@ stored vouchers, Firm OS refuses to wipe them and the agent reports it.
 
 ## Build the .exe
 
-`powershell -File build_exe.ps1` (needs `pip install pyinstaller`). Unsigned executables may be flagged by antivirus; sign the file before giving it to clients.
+`powershell -File build_exe.ps1` (needs `pip install pyinstaller`). The exe keeps a console window so it can show the pairing code; at login it starts minimised. Unsigned executables may be flagged by antivirus; sign the file before giving it to clients.
 
 ## Tests
 

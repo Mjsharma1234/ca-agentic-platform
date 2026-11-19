@@ -11,7 +11,7 @@ from datetime import datetime
 from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, UniqueConstraint
 
 from ..core.database import Base
-from .base import GUID
+from .base import GUID, JSONB
 
 
 class TallyAgent(Base):
@@ -46,6 +46,31 @@ class TallyCompany(Base):
     last_period_to = Column(String(10), nullable=True)
     last_voucher_count = Column(Integer, nullable=True)
     last_error = Column(String(500), nullable=True)
+    link_method = Column(String(10), nullable=True)            # "manual" or "auto" (matched by exact name); None while unlinked
 
 
+class TallyEnrollment(Base):
+    """A Tally agent asking to be paired with a firm (device-code flow).
+
+    The agent starts one with no credentials; a signed-in manager approves it by its short user_code; the agent
+    then collects a freshly generated key exactly once by polling with its secret device_code. Until approval the
+    row belongs to no firm (tenant_id NULL), so it is reachable only in system scope (see migration 0014).
+    """
+    __tablename__ = "tally_enrollments"
+
+    id = Column(GUID, primary_key=True, default=uuid.uuid4)
+    device_code_hash = Column(String(64), nullable=False, unique=True, index=True)
+    user_code = Column(String(9), nullable=False, unique=True, index=True)   # XXXX-XXXX, shown on the PC and in the link
+    status = Column(String(12), nullable=False, default="pending")           # pending | approved | denied | delivered
+    pc_name = Column(String(80), nullable=False, default="")
+    agent_version = Column(String(32), nullable=False, default="")
+    companies = Column(JSONB, nullable=False, default=list)                  # Tally companies the agent saw, for the approver
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    expires_at = Column(DateTime, nullable=False)
+    tenant_id = Column(GUID, nullable=True, index=True)
+    approved_by = Column(String(64), nullable=True)
+    agent_id = Column(GUID, nullable=True)
+
+
+TALLY_ENROLLMENT_TABLES = ["tally_enrollments"]
 TALLY_AGENT_TABLES = ["tally_agents", "tally_companies"]

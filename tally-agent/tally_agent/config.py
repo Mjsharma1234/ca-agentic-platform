@@ -15,6 +15,12 @@ from typing import Optional
 from urllib.parse import urlparse
 
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
+# Where the agent connects unless told otherwise (override with the FIRMOS_SERVER environment variable).
+DEFAULT_SERVER = "https://ca-agentic-platform.onrender.com"
+
+
+def default_server() -> str:
+    return os.environ.get("FIRMOS_SERVER", "").strip() or DEFAULT_SERVER
 
 
 class ConfigError(Exception):
@@ -75,7 +81,7 @@ def unseal(stored: str) -> str:
 
 @dataclass
 class Config:
-    server_url: str = ""
+    server_url: str = ""    # empty means the built-in default server
     agent_key: str = ""
     tally_url: str = "http://localhost:9000"
     interval_minutes: int = 60
@@ -83,7 +89,7 @@ class Config:
     fetch_all_voucher_types: bool = False  # fallback if Tally ignores our purchase filter (the server filters again)
 
     def validate(self) -> "Config":
-        self.server_url = validate_server_url(self.server_url)
+        self.server_url = validate_server_url(self.server_url or default_server())
         if not self.agent_key.startswith("fosk_"):
             raise ConfigError("That does not look like a Firm OS agent key (it should start with fosk_).")
         if self.interval_minutes < 5:

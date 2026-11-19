@@ -105,3 +105,54 @@ def test_agent_to_backend_round_trip():
     web.delete(f"/api/v1/tally-agent/agents/{agent_id}", headers=admin)
     revoked = run_sync(_tally([v1]), uploader, today=today)
     assert not revoked.ok and "revoked" in revoked.fatal
+
+
+def test_pair_by_approval_auto_link_and_sync_with_no_manual_steps():
+    """The whole automatic path: pair (a manager approves once), the company links itself by name, the register syncs."""
+    import re
+    from fastapi.testclient import TestClient
+    from app.core.database import SessionLocal, create_tables
+    from app.core.security import create_access_token
+    from app.main import app
+    from app.models.clients import Client, ClientType, ERPType
+    from app.models.tenant import Firm, User
+    from tally_agent.pairing import pair
+
+    create_tables()
+    web = TestClient(app)
+    tenant, uid = uuid.uuid4(), uuid.uuid4()
+    with SessionLocal() as db:
+        db.add(Firm(id=tenant, firm_code=f"auto-{tenant.hex[:8]}", firm_name="Auto Firm"))
+        db.add(User(id=uid, firm_id=tenant, email=f"{uid.hex[:6]}@auto.test", full_name="M", role="PARTNER",
+                    hashed_password="x", is_active=True))
+        client = Client(tenant_id=tenant, client_name="Acme Pvt Ltd", pan="AABCA1234A", gstin="27AABCA1234A1Z5",
+                        client_type=ClientType.COMPANY, erp_type=ERPType.TALLY_PRIME,
+                        financial_year_start="2025-04-01", financial_year_end="2026-03-31")
+        db.add(client)
+        db.commit()
+        client_id = str(client.id)
+    admin = {"Authorization": "Bearer " + create_access_token({"sub": str(uid), "tenant_id": str(tenant), "role": "PARTNER"},
+                                                              expires_delta=timedelta(minutes=30))}
+
+    shown, approved = [], []
+
+    def person_approves_when_the_agent_waits(_seconds):
+        """Stands in for the manager clicking Approve in the browser while the agent polls."""
+        if shown and not approved:
+            code = re.search(r"[A-Z2-9]{4}-[A-Z2-9]{4}", " ".join(shown)).group(0)
+            assert web.get(f"/api/v1/tally-agent/enroll/{code}", headers=admin).json()["companies"] == [COMPANY]
+            assert web.post(f"/api/v1/tally-agent/enroll/{code}/approve", headers=admin).status_code == 200
+            approved.append(code)
+
+    key = pair("http://testserver", [COMPANY], http=web, sleep=person_approves_when_the_agent_waits,
+               opener=lambda url: None, out=shown.append, pc_name="FRONT-DESK")
+    assert key.startswith("fosk_") and approved
+
+    uploader = Uploader("http://testserver", key, client=web, sleep=lambda s: None)
+    report = run_sync(_tally([_voucher("g1", "INV-1", "ABC Traders", "27AAAAA0000A1Z5", 1000, 90, 90)]), uploader, today=date(2026, 1, 20))
+    assert report.ok and [c.status for c in report.companies] == ["synced"]          # linked itself: no waiting_for_link
+
+    comp = web.get("/api/v1/tally-agent/companies", headers=admin).json()[0]
+    assert comp["link_method"] == "auto" and comp["client_id"] == client_id
+    s = web.get(f"/api/v1/returns/reconciliation?client_id={client_id}", headers=admin).json()["summary"]
+    assert s["total_books_records"] == 1 and s["books_total_tax"] == 180.0
