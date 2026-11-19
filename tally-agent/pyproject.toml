@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "firmos-tally-agent"
-version = "0.1.0"
+version = "0.2.0"
 description = "Reads a client's Tally purchase register on their PC and sends it to Firm OS"
 requires-python = ">=3.10"
 dependencies = ["httpx>=0.27"]

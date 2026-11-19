@@ -1,12 +1,14 @@
 /* CA Firm OS — Backend API Bridge
    Connects the browser state to the FastAPI backend.
    API base resolution (first match wins):
-     1. window.FIRM_OS_API_BASE (set in a <script> before this file)
-     2. localStorage 'bahi_api_base'  (e.g. https://your-backend.onrender.com/api/v1)
-     3. same origin when served by the backend: on :8000 (local), or on a *.onrender.com address
-        (the Render service serves this web app itself). A custom domain or any other host
-        (e.g. the Vercel copy) must use option 1 or 2.
-     4. http://127.0.0.1:8000/api/v1 (local development) */
+     1. window.FIRM_OS_API_BASE (set in a <script> before this file): an explicit override
+     2. localStorage 'bahi_api_base'  (a per-browser override, e.g. a staging backend)
+     3. same origin when served by the backend itself: on :8000 (local) or on a *.onrender.com address
+     4. a local backend (http://127.0.0.1:8000/api/v1) when the page is a local file or on localhost/127.0.0.1
+     5. otherwise the production backend below. So the Vercel copy, a custom domain, or any other host
+        connects with no configuration. */
+
+const DEFAULT_BACKEND = 'https://ca-agentic-platform.onrender.com/api/v1';
 
 const API_BASE = (() => {
   try {
@@ -16,7 +18,8 @@ const API_BASE = (() => {
   } catch (e) { /* storage blocked */ }
   const loc = window.location;
   if (loc.origin && (loc.origin.includes(':8000') || /\.onrender\.com$/i.test(loc.hostname))) return `${loc.origin}/api/v1`;
-  return 'http://127.0.0.1:8000/api/v1';
+  if (loc.protocol === 'file:' || ['localhost', '127.0.0.1', '[::1]', '::1', ''].includes(loc.hostname)) return 'http://127.0.0.1:8000/api/v1';
+  return DEFAULT_BACKEND;
 })();
 
 const API_CLIENT = {

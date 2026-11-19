@@ -48,3 +48,15 @@ Language: Python (shares repo, tests and skills with the backend). The agent shi
 - Tally's XML differs by version and by how each company is configured. The parser is written to tolerate variants but was built against synthetic XML modelled on Tally's format, not a real install. **It must be run against the user's real Tally before it is trusted.**
 - Very large companies may need chunked uploads; the cap is 50 MB after decompression.
 - The PostgreSQL row-level-security part of the migration is written to match migrations 0010 and 0011 but has not been run on PostgreSQL.
+
+## Addendum 2026-11-19: automatic connection
+
+The user asked for everything to be automatic rather than manual. Decisions:
+
+- **Web app finds the backend itself.** Local hosts use the local backend; every other host (Vercel, a custom domain) uses the production backend built into `api-bridge.js`; overrides still win.
+- **Pairing by device code, not by copying keys.** The agent calls `/tally-agent/enroll/start`, opens `#/tally/<code>`, and polls. A signed-in manager approves; the agent then receives a freshly generated key once (never stored raw). Table `tally_enrollments` (migration 0014), reachable only in system scope until approved.
+- **One approval click remains, on purpose.** Fully unattended pairing would let anyone attach any PC to any firm. Residual risk (standard for device-code flows): an attacker starts pairing on their own machine and tricks a manager into approving. The approval screen therefore shows the PC name, the Tally companies it sees and the code that must match the one on the PC. A manager approving gives that PC the ability to add purchase vouchers to clients linked in THEIR firm.
+- **Abuse limits on the unauthenticated routes:** 500 pending requests cap, 15-minute lifetime, per-address and per-device-code rate limits, and a per-user cap on code lookups (30/hour) so codes cannot be guessed. Behind Render's proxy the per-address limit may see one shared address, so the cap is the real guard.
+- **Auto-link:** a Tally company links itself to a client only on an exact normalised name match with exactly one client that has no Tally company yet; recorded as `link_method = "auto"`, audited, shown in the UI. Anything uncertain is left to a person because a wrong link would put one client's purchases into another's register.
+- **Start at login** via the per-user Run registry key (opt-out with `--no-autostart`).
+- Not automatic and cannot be: installing the agent on the PC (a web page cannot install software), and signing in to Firm OS.
