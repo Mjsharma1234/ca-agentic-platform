@@ -93,13 +93,19 @@ def cmd_auto(_args) -> int:
         cfg = load()
         try:
             Uploader(cfg.server_url, cfg.agent_key).heartbeat([])
+            # A code is only shown when a PC is NOT connected, so say plainly why there is none to enter.
+            print(f"This PC is already connected to Firm OS ({cfg.server_url}). There is no code to enter.\n"
+                  "Leave this window open (you can minimise it): it syncs now, then every hour.\n"
+                  "To connect it again (a different firm, or to start fresh), click Disconnect next to this PC on the\n"
+                  "Tally sync page in Firm OS, close this window, and run the agent again: it will show a new code.\n")
         except ServerRejected as e:
             if e.status != 401:
                 raise
             print("This PC's connection was removed in Firm OS. Pairing again...")
             return _connect(cfg.server_url, cfg.tally_url, True, True) or cmd_run(None)
         except ServerUnavailable:
-            pass   # Firm OS asleep or offline: the sync loop retries
+            print(f"This PC is already connected to Firm OS ({cfg.server_url}), but Firm OS did not answer just now "
+                  "(it may be waking up). The agent keeps trying; there is no code to enter.\n")
     except ConfigError:
         code = _connect(default_server(), "http://localhost:9000", True, True)
         if code not in (0,):

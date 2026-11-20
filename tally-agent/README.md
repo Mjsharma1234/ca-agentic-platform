@@ -7,7 +7,7 @@ and Tally's port is never exposed to the internet: the agent only makes outbound
 ## Connect a PC (automatic)
 
 1. **In Tally:** F1 (Help) > Settings > Connectivity > Client/Server configuration: set TallyPrime to act as *Both* (or *Server*), port **9000**. Open the client's company.
-2. **Start the agent** on that PC (double-click `FirmOSTallyAgent.exe`, or run `firmos-tally-agent`). It opens Firm OS in the browser with a short code.
+2. **Get and start the agent** on that PC: in Firm OS open **Tally sync** and click **Download for Windows**, then double-click `FirmOSTallyAgent.exe` (Windows may warn about an unrecognised app because it is not code-signed yet: **More info**, then **Run anyway**). Developers can run `firmos-tally-agent` instead. The agent opens Firm OS in the browser by itself with a short code in the link, and shows the same code in its window.
 3. **A manager or partner, signed in to Firm OS, checks the code matches the one on the PC and clicks Approve.** This one click is deliberate: without it, anyone could attach any PC to any firm.
 
 That is all. The agent receives its own key (nothing to copy), syncs straight away, keeps syncing every hour, and starts again when Windows starts
@@ -69,6 +69,10 @@ powershell -File build_exe.ps1
 
 Produces `dist\FirmOSTallyAgent.exe` (about 9.5 MB, no Python needed on the client PC) and prints its SHA-256. The script builds in a throwaway
 virtual environment under `%TEMP%` (installing PyInstaller and httpx there, not into your main Python), and `dist/` is not committed.
+
+It also **publishes** the build for the Tally sync page: the exe and a `version.json` (version, size, SHA-256) are copied to `firm_os_web/downloads/`,
+which Firm OS serves as `downloads/FirmOSTallyAgent.exe`. **Commit both files together** after every rebuild or version bump; a test fails if the
+published exe does not match `version.json` or the agent's version.
 
 - The exe keeps a console window so it can show the pairing code; at login it starts minimised.
 - Windows SmartScreen or antivirus may warn about an unsigned exe. Sign it with a code-signing certificate before giving it to clients.

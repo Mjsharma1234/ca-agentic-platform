@@ -23,6 +23,17 @@ const TALLY_API = {
 
 let TALLY_FAST_UNTIL = 0;   // refresh the Tally page every few seconds until this time
 
+/* The agent download is published next to the web app (downloads/FirmOSTallyAgent.exe) with a version.json beside it. */
+let TALLY_AGENT_INFO = null;
+function fillAgentMeta(scope) {
+  const paint = info => {
+    const text = info ? `Version ${esc(info.version)} · ${(info.size_bytes / 1048576).toFixed(1)} MB` + (info.signed ? '' : ' · not code-signed') : '';
+    $$('[data-agent-meta]', scope).forEach(el => { el.innerHTML = text; if (info && info.sha256) el.title = 'SHA-256 ' + info.sha256; });
+  };
+  if (TALLY_AGENT_INFO) return paint(TALLY_AGENT_INFO);
+  fetch('downloads/version.json', { cache: 'no-cache' }).then(r => r.ok ? r.json() : null).then(info => { if (info) { TALLY_AGENT_INFO = info; paint(info); } }).catch(() => { /* the button works without it */ });
+}
+
 /* "Not signed in to the server" card with a button that does something about it. A browser can hold an old demo session
    (the app looks signed in, but the server has no session); the button clears that, shows the real sign-in, and
    brings the person back to `next` (a route such as 'tally/ABCD-2345') once they are in. */
@@ -147,7 +158,24 @@ VIEWS.tally = {
     });
 
     const draw = (agents, companies, clients) => {
+      const noPc = !agents.some(a => !a.revoked);
+      // The CA never has to find or type a code: the agent opens this page by itself with the code in the link.
+      const guide = `<div class="card pad" style="${noPc ? 'margin-bottom:16px;border-color:var(--agent)' : ''}"><b>${noPc ? 'Connect your Tally PC (about 2 minutes)' : 'Connect another PC'}</b>
+            <ol style="padding-left:20px;margin:10px 0 0;display:grid;gap:10px;font-size:13.5px">
+              <li><b>On the PC where Tally runs</b>, open Tally with the client's company, and switch on its connection: <span class="muted">F1 Help, Settings, Connectivity, then set TallyPrime to act as <b>Both</b> on port <b>9000</b>.</span></li>
+              <li><b>Download the agent</b> and double-click it.
+                <div class="flex" style="gap:10px;align-items:center;margin:6px 0 4px;flex-wrap:wrap"><a class="btn primary" href="downloads/FirmOSTallyAgent.exe" download>Download for Windows</a><span class="small muted" data-agent-meta></span></div>
+                <span class="small muted">If Windows says “Windows protected your PC”, click <b>More info</b>, then <b>Run anyway</b>. (The agent is not code-signed yet.)</span></li>
+              <li><b>Your browser opens by itself</b> on this page, showing a code. The same code is shown in the agent's black window. If they match, click <b>Approve this PC</b>.
+                <div class="small muted" style="margin-top:4px">Browser did not open? Type the code from the agent's window here:</div>
+                <div class="flex" style="gap:6px;margin-top:4px"><input class="input mono" id="tally-code" maxlength="9" placeholder="ABCD-2345" style="width:130px" aria-label="Pairing code from the agent window"><button class="btn xs" id="tally-code-go">Enter a code</button></div></li>
+              <li><b>That is all.</b> It syncs straight away, then every hour, and starts again whenever Windows starts. Clients are linked by name, or you create one with the button next to the company.</li>
+            </ol>
+            <details class="mt8"><summary class="small muted">Advanced: issue a key by hand</summary>
+              <p class="small muted">For a PC that cannot open a browser. Copy the key into <span class="mono">firmos-tally-agent setup</span>.</p><button class="btn xs" id="tally-new">${icon('plus')} Issue key</button></details>
+          </div>`;
       root.innerHTML = `
+      ${noPc ? guide : ''}
       <div class="grid g-main">
         <div class="grid" style="gap:16px;align-content:start">
           <div class="card"><div class="card-h"><h3>Tally companies<small>Appear here by themselves once a connected PC has Tally open</small></h3></div>
@@ -161,7 +189,7 @@ VIEWS.tally = {
                   ${c.linked ? `<div class="flex" style="gap:6px;margin-top:6px"><button class="btn xs primary" data-open="${esc(c.id)}">Open register</button><button class="btn xs" data-sync="${esc(c.id)}" ${c.sync_pending ? 'disabled' : ''}>${c.sync_pending ? 'Requested…' : 'Sync now'}</button></div>`
                     : `<div style="margin-top:6px"><button class="btn xs primary" data-create="${esc(c.id)}" data-name="${esc(c.company_name)}">Create client</button></div>`}</td></tr>
                 ${c.last_error ? `<tr><td colspan="5" class="small" style="color:var(--bad)">${esc(c.last_error)}</td></tr>` : ''}`).join('')}
-            </tbody></table></div>` : `<div class="card-b"><p class="muted">No Tally company has reported in yet. Start the agent on the PC where Tally runs and approve it when it asks.</p></div>`}
+            </tbody></table></div>` : `<div class="card-b"><p class="muted">No Tally company has reported in yet. Once a PC is connected, its open companies appear here by themselves.</p></div>`}
           </div>
         </div>
         <div class="grid" style="gap:16px;align-content:start">
@@ -171,19 +199,10 @@ VIEWS.tally = {
               ${a.revoked ? '' : `<button class="btn xs" data-revoke="${esc(a.id)}" data-name="${esc(a.name)}">Disconnect</button>`}</div>`).join('')}</div>`
               : `<div class="card-b"><p class="muted small">No PC is connected yet.</p></div>`}
           </div>
-          <div class="card pad"><b>Connecting a PC</b>
-            <ol class="small muted" style="padding-left:18px;margin:8px 0 0">
-              <li>On the PC where Tally runs, start the Firm OS agent. It opens this page with a code.</li>
-              <li>Check the code matches, then click <b>Approve</b>.</li>
-              <li>That is all. The PC syncs now and keeps syncing every hour, and starts again when Windows starts.</li>
-            </ol>
-            <p class="small muted mt8">In Tally, the HTTP server must be on (F1 Help, Settings, Connectivity: act as Both, port 9000).</p>
-            <div class="flex mt8" style="gap:6px"><input class="input mono" id="tally-code" maxlength="9" placeholder="ABCD-2345" style="width:130px" aria-label="Pairing code from a PC"><button class="btn xs" id="tally-code-go">Enter a code</button></div>
-            <details class="mt8"><summary class="small muted">Advanced: issue a key by hand</summary>
-              <p class="small muted">For a PC that cannot open a browser. Copy the key into <span class="mono">firmos-tally-agent setup</span>.</p><button class="btn xs" id="tally-new">${icon('plus')} Issue key</button></details>
-          </div>
+          ${noPc ? '' : guide}
         </div>
       </div>`;
+      fillAgentMeta(root);
 
       $$('[data-link]', root).forEach(sel => sel.onchange = async () => {
         try {
