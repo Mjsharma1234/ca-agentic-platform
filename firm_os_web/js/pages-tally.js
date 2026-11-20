@@ -15,6 +15,7 @@ const TALLY_API = {
   register: (id, period) => API_CLIENT._get(`/tally-agent/companies/${id}/register` + (period ? '?period=' + encodeURIComponent(period) : '')),
   reconcile: (id, gstr2b, allPeriods) => API_CLIENT._send('POST', `/tally-agent/companies/${id}/reconcile`, { gstr2b, all_periods: !!allPeriods }),
   syncNow: id => API_CLIENT._send('POST', `/tally-agent/companies/${id}/sync-now`, {}),
+  createClient: body => API_CLIENT._send('POST', '/clients/', body),
   pairInfo: code => API_CLIENT._get(`/tally-agent/enroll/${encodeURIComponent(code)}`),
   pairApprove: code => API_CLIENT._send('POST', `/tally-agent/enroll/${encodeURIComponent(code)}/approve`, {}),
   pairDeny: code => API_CLIENT._send('POST', `/tally-agent/enroll/${encodeURIComponent(code)}/deny`, {})
@@ -108,6 +109,43 @@ VIEWS.tally = {
       draw(agents, companies, clients);
     };
 
+    /* A new firm has no clients, so a Tally company has nothing to link to. This creates the client (name taken from
+       Tally) and links the company to it in one step. The PAN is worked out from the GSTIN when one is given. */
+    const createClientFor = (companyId, companyName) => openModal({
+      html: `<div class="modal-b"><h2>Create a client for this Tally company</h2>
+        <p class="dim small">Adds the client to Firm OS and links “${esc(companyName)}” to it, so its purchases sync into this client's books.</p>
+        <div style="display:grid;gap:10px;margin-top:12px">
+          <label class="small muted">Client name<input class="input" id="cc-name" maxlength="200" value="${esc(companyName)}" style="width:100%"></label>
+          <label class="small muted">GSTIN (optional)<input class="input mono" id="cc-gstin" maxlength="15" placeholder="27AABCS1429B1ZU" style="width:100%"></label>
+          <label class="small muted">PAN<input class="input mono" id="cc-pan" maxlength="10" placeholder="AABCS1429B" style="width:100%"></label>
+          <label class="small muted">Type<select class="input" id="cc-type" style="width:100%">${['Private Limited', 'LLP', 'Partnership', 'Individual', 'HUF', 'Trust'].map(t => `<option>${t}</option>`).join('')}</select></label>
+          <div id="cc-err" class="small" style="color:var(--bad)" role="alert"></div>
+        </div>
+        <div class="flex" style="justify-content:flex-end;margin-top:14px"><button class="btn ghost" data-x>Cancel</button><button class="btn primary" data-ok>Create and link</button></div></div>`,
+      onMount: m => {
+        const gstin = $('#cc-gstin', m), pan = $('#cc-pan', m), err = $('#cc-err', m), ok = $('[data-ok]', m);
+        $('#cc-name', m).focus();
+        gstin.oninput = () => { gstin.value = gstin.value.toUpperCase(); if (/^\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/.test(gstin.value)) pan.value = gstin.value.slice(2, 12); };
+        pan.oninput = () => { pan.value = pan.value.toUpperCase(); };
+        $('[data-x]', m).onclick = () => closeModal();
+        ok.onclick = async () => {
+          const name = $('#cc-name', m).value.trim(), g = gstin.value.trim(), p = pan.value.trim(), type = $('#cc-type', m).value;
+          err.textContent = '';
+          if (name.length < 2) { err.textContent = 'Enter the client name.'; return; }
+          if (!/^[A-Z]{5}\d{4}[A-Z]$/.test(p)) { err.textContent = 'PAN must look like AABCS1429B (5 letters, 4 digits, 1 letter).'; return; }
+          if (g && !/^\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/.test(g)) { err.textContent = 'That GSTIN is not in the right format (15 characters).'; return; }
+          if (g && g.slice(2, 12) !== p) { err.textContent = 'The PAN must match characters 3 to 12 of the GSTIN.'; return; }
+          ok.disabled = true; ok.textContent = 'Creating…';
+          let client;
+          try { client = await TALLY_API.createClient({ name, pan: p, gstin: g || null, type }); }
+          catch (e) { err.textContent = e.message; ok.disabled = false; ok.textContent = 'Create and link'; return; }
+          try { await TALLY_API.link(companyId, client.id); toast('Client created and company linked. Its purchases arrive with the next sync.', 'ok', 'plug'); }
+          catch (e) { toast('Client created, but linking failed: ' + esc(e.message) + '. Choose it in the dropdown.', 'warn', 'lock'); }
+          closeModal(); load();
+        };
+      }
+    });
+
     const draw = (agents, companies, clients) => {
       root.innerHTML = `
       <div class="grid g-main">
@@ -120,7 +158,8 @@ VIEWS.tally = {
                 <td class="small">${c.last_synced_at ? esc(tallyAgo(c.last_synced_at)) + `<div class="muted">${esc(c.last_period_from || '')} to ${esc(c.last_period_to || '')}</div>` : '—'}</td>
                 <td class="r num">${c.last_voucher_count ?? '—'}</td>
                 <td>${c.last_error ? `<span class="chip bad" title="${esc(c.last_error)}">Problem</span>` : c.linked ? (c.last_synced_at ? '<span class="chip ok">Synced</span>' : '<span class="chip outline">Waiting for first sync</span>') : '<span class="chip gate">Pick a client</span>'}
-                  ${c.linked ? `<div class="flex" style="gap:6px;margin-top:6px"><button class="btn xs primary" data-open="${esc(c.id)}">Open register</button><button class="btn xs" data-sync="${esc(c.id)}" ${c.sync_pending ? 'disabled' : ''}>${c.sync_pending ? 'Requested…' : 'Sync now'}</button></div>` : ''}</td></tr>
+                  ${c.linked ? `<div class="flex" style="gap:6px;margin-top:6px"><button class="btn xs primary" data-open="${esc(c.id)}">Open register</button><button class="btn xs" data-sync="${esc(c.id)}" ${c.sync_pending ? 'disabled' : ''}>${c.sync_pending ? 'Requested…' : 'Sync now'}</button></div>`
+                    : `<div style="margin-top:6px"><button class="btn xs primary" data-create="${esc(c.id)}" data-name="${esc(c.company_name)}">Create client</button></div>`}</td></tr>
                 ${c.last_error ? `<tr><td colspan="5" class="small" style="color:var(--bad)">${esc(c.last_error)}</td></tr>` : ''}`).join('')}
             </tbody></table></div>` : `<div class="card-b"><p class="muted">No Tally company has reported in yet. Start the agent on the PC where Tally runs and approve it when it asks.</p></div>`}
           </div>
@@ -153,6 +192,7 @@ VIEWS.tally = {
         } catch (e) { toast(esc(e.message), 'warn', 'lock'); }
         load();
       });
+      $$('[data-create]', root).forEach(b => b.onclick = () => createClientFor(b.dataset.create, b.dataset.name));
       $$('[data-open]', root).forEach(b => b.onclick = () => navTo('#/tallybooks/' + b.dataset.open));
       $$('[data-sync]', root).forEach(b => b.onclick = async () => {
         try { const r = await TALLY_API.syncNow(b.dataset.sync); toast(esc(r.message), 'ok', 'plug'); }
