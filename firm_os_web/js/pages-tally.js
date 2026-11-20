@@ -22,6 +22,19 @@ const TALLY_API = {
 
 let TALLY_FAST_UNTIL = 0;   // refresh the Tally page every few seconds until this time
 
+/* "Not signed in to the server" card with a button that does something about it. A browser can hold an old demo session
+   (the app looks signed in, but the server has no session); the button clears that, shows the real sign-in, and
+   brings the person back to `next` (a route such as 'tally/ABCD-2345') once they are in. */
+function tallySignInCard(root, headline, text, next) {
+  root.innerHTML = `<div class="card pad" style="max-width:640px"><b>${esc(headline)}</b><p class="small muted">${esc(text)}</p><button class="btn primary" id="tally-signin">Sign in</button></div>`;
+  $('#tally-signin', root).onclick = () => {
+    if (typeof API_CLIENT !== 'undefined') API_CLIENT.setToken(null);
+    STATE.session = null; save();
+    LOGIN_NEXT = next;
+    navTo('#/login');
+  };
+}
+
 function tallyWhen(iso) {
   if (!iso) return null;
   const d = new Date(/[zZ]|[+-]\d\d:?\d\d$/.test(iso) ? iso : iso + 'Z');
@@ -45,7 +58,10 @@ VIEWS.tally = {
   mount(el, code) {
     const root = $('#tally-root', el), pairBox = $('#tally-pair', el);
     if (typeof API_CLIENT === 'undefined' || !API_CLIENT.connected) {
-      root.innerHTML = `<div class="card pad" style="max-width:640px"><b>Sign in to the server to use Tally sync</b><p class="small muted">${code ? 'You opened a link from a PC that wants to connect. Sign in first; you will come back here to approve it.' : 'This page manages PCs and links stored on the server, so it is not available in the offline demo.'}</p></div>`;
+      tallySignInCard(root, 'Sign in to the server to use Tally sync',
+        code ? 'You opened a link from a PC that wants to connect. Sign in first; you will come back here to approve it.'
+             : 'This page manages PCs and links stored on the server. Your browser is not signed in to the server (it may hold an old demo session).',
+        'tally' + (code ? '/' + encodeURIComponent(code) : ''));
       return;
     }
 

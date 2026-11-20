@@ -35,7 +35,8 @@ VIEWS.tallybooks = {
   mount(el, companyId) {
     const root = $('#tb-root', el);
     if (typeof API_CLIENT === 'undefined' || !API_CLIENT.connected) {
-      root.innerHTML = '<div class="card pad" style="max-width:640px"><b>Sign in to the server to see the register</b></div>';
+      tallySignInCard(root, 'Sign in to the server to see the register',
+        'Your browser is not signed in to the server (it may hold an old demo session).', 'tallybooks/' + companyId);
       return;
     }
     let period = '';
