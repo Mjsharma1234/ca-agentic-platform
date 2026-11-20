@@ -29,6 +29,24 @@ upserts by Tally voucher GUID and removes vouchers that no longer exist in Tally
 `financial_years` to 2 in the settings to also cover the previous year. If Tally returns nothing for a period that already has
 stored vouchers, Firm OS refuses to wipe them and the agent reports it.
 
+The agent syncs every hour and checks in with Firm OS every minute (a tiny request). A manager can click **Sync now** next to a company on
+the Tally sync page; the agent sees the request at its next check-in and syncs straight away. If a manager disconnects the PC, the agent
+stops with exit code 3 and a clear log line instead of retrying forever; starting it again pairs it afresh.
+
+## What you can do in Firm OS with the synced data
+
+On the **Tally sync** page, **Open register** shows the client's purchase register (invoices and debit notes, newest first, with totals, a month
+filter and a search box). The same page reconciles it with **GSTR-2B**: download the JSON from the GST portal (Returns, GSTR-2B, Download),
+choose it, and Firm OS matches it against the register and lists what needs attention:
+
+- amounts that differ, purchases in Tally the supplier has not reported (credit at risk), invoices in GSTR-2B that are not in Tally, and blocked credits under Section 17(5);
+- exact and near matches (invoice numbers that differ only in punctuation or leading zeros).
+
+The file is matched and discarded; only counts go in the audit trail. The file's invoices are matched against **all** the client's purchases, so
+an invoice dated 30 June but booked on 2 July still matches the June return. By default only purchases booked in the return month are
+reported as missing from GSTR-2B (tick "every month" to report all). Credit notes from suppliers match your Tally debit notes.
+Amendments (`b2ba`, `cdnra`) and imports are not read and are listed as warnings.
+
 ## Commands
 
 | Command | Does |

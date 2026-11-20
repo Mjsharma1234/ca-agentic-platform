@@ -501,7 +501,7 @@ function route() {
   } else { navTo('#/today'); return; }
   view.classList.remove('view'); void view.offsetWidth; view.classList.add('view');
   highlightNav(); updateCounts();
-  document.title = page === 'login' ? 'Sign in · CA Firm OS' : (meta ? meta.n : page === 'client' ? (clientById(arg)?.short || 'Client') : 'Home') + ' · CA Firm OS';
+  document.title = page === 'login' ? 'Sign in · CA Firm OS' : (meta ? meta.n : page === 'client' ? (clientById(arg)?.short || 'Client') : (VIEWS[page] && VIEWS[page].title) || 'Home') + ' · CA Firm OS';
   window.scrollTo({ top: 0 });
 }
 const rerender = () => { const y = window.scrollY; route(); window.scrollTo({ top: y }); };

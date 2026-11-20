@@ -52,7 +52,7 @@ def test_pair_returns_the_key_after_approval_and_opens_the_link():
     assert key == "fosk_abc"
     assert opened == [f"{SERVER}/#/tally/ABCD-2345"]
     assert any("ABCD-2345" in line for line in out)                       # the code is shown on the PC for the approver to match
-    assert seen[0] == ("/api/v1/tally-agent/enroll/start", {"pc_name": "FRONT-DESK", "agent_version": "0.2.0", "companies": ["Acme"]})
+    assert seen[0] == ("/api/v1/tally-agent/enroll/start", {"pc_name": "FRONT-DESK", "agent_version": "0.3.0", "companies": ["Acme"]})
     assert [p for p, _ in seen].count("/api/v1/tally-agent/enroll/poll") == 3
 
 

@@ -27,6 +27,7 @@ class TallyAgent(Base):
     last_seen_at = Column(DateTime, nullable=True)
     agent_version = Column(String(32), nullable=True)
     revoked_at = Column(DateTime, nullable=True)
+    sync_requested_at = Column(DateTime, nullable=True)         # a manager asked this PC to sync now; cleared when the PC picks it up
 
 
 class TallyCompany(Base):

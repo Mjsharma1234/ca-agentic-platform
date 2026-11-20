@@ -11,7 +11,7 @@ from pathlib import Path
 from . import __version__, autostart
 from .config import Config, ConfigError, config_dir, default_server, load, save, validate_server_url
 from .pairing import PairingError, pair
-from .sync import financial_year, run_sync
+from .sync import financial_year, run_loop, run_sync
 from .tally_client import TallyClient, TallyError
 from .uploader import ServerRejected, ServerUnavailable, Uploader
 
@@ -152,14 +152,8 @@ def cmd_sync(_args) -> int:
 def cmd_run(_args) -> int:
     cfg = load()
     tally, up = _clients(cfg)
-    log.info("Agent %s started; syncing every %d minutes.", __version__, cfg.interval_minutes)
-    while True:
-        try:
-            report = run_sync(tally, up, cfg.financial_years, cfg.fetch_all_voucher_types, log=log.info)
-            log.info("Sync finished: %s", report.summary())
-        except Exception:  # never let one bad pass stop the service
-            log.exception("Sync failed unexpectedly")
-        time.sleep(cfg.interval_minutes * 60)
+    log.info("Agent %s started; syncing every %d minutes, and whenever Firm OS asks.", __version__, cfg.interval_minutes)
+    return run_loop(tally, up, cfg.interval_minutes, cfg.financial_years, cfg.fetch_all_voucher_types, log=log.info)
 
 
 def cmd_dump(args) -> int:
