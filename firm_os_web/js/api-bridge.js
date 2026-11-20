@@ -99,13 +99,25 @@ const API_CLIENT = {
   async _get(path) {
     const resp = await fetch(`${API_BASE}${path}`, { headers: this.getHeaders() });
     let data = null; try { data = await resp.json(); } catch (e) { }
-    if (!resp.ok) { const err = new Error((data && typeof data.detail === 'string' && data.detail) || `HTTP ${resp.status}`); err.status = resp.status; throw err; }
+    if (!resp.ok) {
+      // FastAPI reports a rejected field as a list of {loc, msg}; show those messages instead of a bare "HTTP 422".
+      const detail = data && data.detail;
+      const text = typeof detail === 'string' ? detail
+        : Array.isArray(detail) ? detail.map(d => (d && d.msg ? String(d.msg).replace(/^Value error, /, '') : '')).filter(Boolean).join('; ') : '';
+      const err = new Error(text || `HTTP ${resp.status}`); err.status = resp.status; throw err;
+    }
     return data;
   },
   async _send(method, path, body) {
     const resp = await fetch(`${API_BASE}${path}`, { method, headers: this.getHeaders(), body: JSON.stringify(body) });
     let data = null; try { data = await resp.json(); } catch (e) { }
-    if (!resp.ok) { const err = new Error((data && typeof data.detail === 'string' && data.detail) || `HTTP ${resp.status}`); err.status = resp.status; throw err; }
+    if (!resp.ok) {
+      // FastAPI reports a rejected field as a list of {loc, msg}; show those messages instead of a bare "HTTP 422".
+      const detail = data && data.detail;
+      const text = typeof detail === 'string' ? detail
+        : Array.isArray(detail) ? detail.map(d => (d && d.msg ? String(d.msg).replace(/^Value error, /, '') : '')).filter(Boolean).join('; ') : '';
+      const err = new Error(text || `HTTP ${resp.status}`); err.status = resp.status; throw err;
+    }
     return data;
   },
 
