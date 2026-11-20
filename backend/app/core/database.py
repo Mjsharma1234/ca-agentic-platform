@@ -7,20 +7,12 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker, declarative_base
 
 from .config import settings
+from .db_url import normalise_url
 
 _ROLE_NAME = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
 
-
-def _normalise_url(url: str) -> str:
-    """Migrations and the API both run on synchronous drivers."""
-    for old, new in (
-        ("sqlite+aiosqlite:///", "sqlite:///"),
-        ("postgresql+asyncpg:", "postgresql+psycopg2:"),
-        ("postgres://", "postgresql+psycopg2://"),
-    ):
-        if url.startswith(old):
-            return url.replace(old, new, 1)
-    return url
+# Migrations and the API both run on synchronous drivers; see db_url.py for why the driver must be named.
+_normalise_url = normalise_url
 
 
 def _build_engine(url: str, *, restricted: bool) -> Engine:

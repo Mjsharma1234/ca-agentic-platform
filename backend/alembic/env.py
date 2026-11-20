@@ -11,6 +11,7 @@ from sqlalchemy import engine_from_config, pool
 
 from app.core.config import settings
 from app.core.database import Base
+from app.core.db_url import normalise_url
 from app import models  # noqa: F401  (registers every table on Base.metadata)
 
 config = context.config
@@ -37,16 +38,7 @@ def include_object(obj, name, type_, reflected, compare_to):
 
 def _sync_url() -> str:
     # Migrations need the schema owner; the API itself runs as the restricted role (DATABASE_URL).
-    url = settings.DATABASE_ADMIN_URL or settings.DATABASE_URL
-    replacements = {
-        "sqlite+aiosqlite:": "sqlite:",
-        "postgresql+asyncpg:": "postgresql+psycopg2:",
-        "postgres://": "postgresql+psycopg2://",
-    }
-    for old, new in replacements.items():
-        if url.startswith(old):
-            url = url.replace(old, new, 1)
-    return url
+    return normalise_url(settings.DATABASE_ADMIN_URL or settings.DATABASE_URL)
 
 
 def run_migrations_offline() -> None:
