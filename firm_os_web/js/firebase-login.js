@@ -9,6 +9,7 @@
    platform's own session is the only one that matters. The SDK loads from Firebase's CDN on first use. */
 
 const FIREBASE_SDK = 'https://www.gstatic.com/firebasejs/10.14.1';
+const SEND_TIMEOUT_MS = 25000;   // how long to wait for the SMS request before telling the person something is wrong
 
 const FIREBASE_LOGIN = {
   _sdk: null,
@@ -43,11 +44,16 @@ const FIREBASE_LOGIN = {
 
   /* Sends the SMS. `phone` must be E.164 (+91…). `containerId` is an empty element for the reCAPTCHA. */
   async sendCode(config, phone, containerId) {
-    const s = await this._load(config);
+    let s;
+    try { s = await this._load(config); }
+    catch (e) { throw Object.assign(new Error('Could not load the Firebase sign-in script.'), { code: 'app/sdk-blocked' }); }
     this._resetVerifier();
     this._verifier = new s.RecaptchaVerifier(this._auth, containerId, { size: 'invisible' });
+    // The invisible reCAPTCHA can fail to finish without ever raising an error (an embedded or private browser window,
+    // an ad or script blocker, a blocked google.com frame). Without a limit the button would say "Sending..." forever.
+    const giveUp = new Promise((_, reject) => setTimeout(() => reject(Object.assign(new Error('timeout'), { code: 'app/send-timeout' })), SEND_TIMEOUT_MS));
     try {
-      this._confirmation = await s.signInWithPhoneNumber(this._auth, phone, this._verifier);
+      this._confirmation = await Promise.race([s.signInWithPhoneNumber(this._auth, phone, this._verifier), giveUp]);
     } catch (e) {
       this._resetVerifier();
       throw e;
@@ -84,6 +90,8 @@ const FIREBASE_LOGIN = {
       'auth/billing-not-enabled': 'SMS sign-in needs billing on the Firebase project (upgrade to the Blaze plan), or use a registered Firebase test number.',
       'auth/unauthorized-domain': 'This web address is not an authorised domain in the Firebase project (Authentication → Settings → Authorised domains).',
       'auth/invalid-api-key': 'The Firebase web API key on the server is wrong (FIREBASE_WEB_API_KEY).',
+      'app/send-timeout': 'No SMS was sent: the security check did not finish. Open Firm OS in a normal Chrome or Edge window (not an app’s built-in browser or a private window), turn off ad or script blockers for this site, reload, and try again.',
+      'app/sdk-blocked': 'Could not load Google’s sign-in script. Check the internet connection, turn off ad or script blockers for this site, and try again.',
       'app/no-code': 'Ask for a new code first.'
     })[code] || (err && err.message) || 'Sign-in failed. Please try again.';
   }
