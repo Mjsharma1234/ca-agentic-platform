@@ -317,10 +317,13 @@ def test_tally_page_calls_only_existing_backend_routes():
     web = Path(__file__).resolve().parents[2] / "firm_os_web"
     src = (web / "js" / "pages-tally.js").read_text(encoding="utf-8")
     paths = {re.sub(r"\$\{[^}]+\}", "{param}", p) for p in re.findall(r"['`](/(?:tally-agent|clients)[^'`?]*)['`]", src)}
-    assert len(paths) >= 5, paths
+    assert len(paths) >= 11, paths     # includes register, reconcile and sync-now: a path the regex skipped would shrink this
     routes = {getattr(r, "path", "").removeprefix("/api/v1") for r in app.routes}
     for p in paths:
         pattern = re.escape(p).replace(re.escape("{param}"), r"\{[^}]+\}")
         assert any(re.fullmatch(pattern, r) for r in routes), f"pages-tally.js calls a missing route: {p}"
-    assert 'src="js/pages-tally.js"' in (web / "index.html").read_text(encoding="utf-8")
+    index = (web / "index.html").read_text(encoding="utf-8")
+    assert 'src="js/pages-tally.js"' in index and 'src="js/pages-tally-books.js"' in index
+    assert index.index("pages-tally.js") < index.index("pages-tally-books.js")     # the books view uses helpers defined in the first file
+    assert "VIEWS.tallybooks" in (web / "js" / "pages-tally-books.js").read_text(encoding="utf-8")
     assert "k: 'tally'" in (web / "js" / "core.js").read_text(encoding="utf-8")

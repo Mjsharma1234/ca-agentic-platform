@@ -12,10 +12,15 @@ const TALLY_API = {
   create: name => API_CLIENT._send('POST', '/tally-agent/agents', { name }),
   revoke: id => API_CLIENT._send('DELETE', `/tally-agent/agents/${id}`),
   link: (id, client_id) => API_CLIENT._send('PUT', `/tally-agent/companies/${id}/link`, { client_id }),
+  register: (id, period) => API_CLIENT._get(`/tally-agent/companies/${id}/register` + (period ? '?period=' + encodeURIComponent(period) : '')),
+  reconcile: (id, gstr2b, allPeriods) => API_CLIENT._send('POST', `/tally-agent/companies/${id}/reconcile`, { gstr2b, all_periods: !!allPeriods }),
+  syncNow: id => API_CLIENT._send('POST', `/tally-agent/companies/${id}/sync-now`, {}),
   pairInfo: code => API_CLIENT._get(`/tally-agent/enroll/${encodeURIComponent(code)}`),
   pairApprove: code => API_CLIENT._send('POST', `/tally-agent/enroll/${encodeURIComponent(code)}/approve`, {}),
   pairDeny: code => API_CLIENT._send('POST', `/tally-agent/enroll/${encodeURIComponent(code)}/deny`, {})
 };
+
+let TALLY_FAST_UNTIL = 0;   // refresh the Tally page every few seconds until this time
 
 function tallyWhen(iso) {
   if (!iso) return null;
@@ -61,9 +66,10 @@ VIEWS.tally = {
         $('#pair-yes', pairBox).onclick = async () => {
           try { await TALLY_API.pairApprove(code); toast('Connected. The PC starts syncing in a few seconds.', 'ok', 'plug'); }
           catch (e) { toast(esc(e.message), 'warn', 'lock'); }
-          pairBox.innerHTML = ''; navTo('#/tally'); load();
-          // The PC collects its key within a few seconds; refresh quickly until it shows up.
-          [2000, 4000, 7000].forEach(ms => setTimeout(() => { if (root.isConnected) load(); }, ms));
+          // The PC collects its key within a few seconds: refresh quickly for a while. (navTo re-renders this page,
+          // so the setting lives at module level where the new page instance reads it.)
+          TALLY_FAST_UNTIL = Date.now() + 25000;
+          pairBox.innerHTML = ''; navTo('#/tally');
         };
         $('#pair-no', pairBox).onclick = async () => {
           try { await TALLY_API.pairDeny(code); toast('Request declined', 'ok', 'lock'); } catch (e) { toast(esc(e.message), 'warn', 'lock'); }
@@ -97,7 +103,8 @@ VIEWS.tally = {
                   ${c.link_method === 'auto' ? '<div class="small muted">Linked automatically: its name matches this client exactly. Check it is right.</div>' : ''}</td>
                 <td class="small">${c.last_synced_at ? esc(tallyAgo(c.last_synced_at)) + `<div class="muted">${esc(c.last_period_from || '')} to ${esc(c.last_period_to || '')}</div>` : '—'}</td>
                 <td class="r num">${c.last_voucher_count ?? '—'}</td>
-                <td>${c.last_error ? `<span class="chip bad" title="${esc(c.last_error)}">Problem</span>` : c.linked ? (c.last_synced_at ? '<span class="chip ok">Synced</span>' : '<span class="chip outline">Waiting for first sync</span>') : '<span class="chip gate">Pick a client</span>'}</td></tr>
+                <td>${c.last_error ? `<span class="chip bad" title="${esc(c.last_error)}">Problem</span>` : c.linked ? (c.last_synced_at ? '<span class="chip ok">Synced</span>' : '<span class="chip outline">Waiting for first sync</span>') : '<span class="chip gate">Pick a client</span>'}
+                  ${c.linked ? `<div class="flex" style="gap:6px;margin-top:6px"><button class="btn xs primary" data-open="${esc(c.id)}">Open register</button><button class="btn xs" data-sync="${esc(c.id)}" ${c.sync_pending ? 'disabled' : ''}>${c.sync_pending ? 'Requested…' : 'Sync now'}</button></div>` : ''}</td></tr>
                 ${c.last_error ? `<tr><td colspan="5" class="small" style="color:var(--bad)">${esc(c.last_error)}</td></tr>` : ''}`).join('')}
             </tbody></table></div>` : `<div class="card-b"><p class="muted">No Tally company has reported in yet. Start the agent on the PC where Tally runs and approve it when it asks.</p></div>`}
           </div>
@@ -128,6 +135,13 @@ VIEWS.tally = {
           await TALLY_API.link(sel.dataset.link, sel.value || null);
           toast(sel.value ? 'Company linked. Its register is sent on the next sync.' : 'Company unlinked', 'ok', 'plug');
         } catch (e) { toast(esc(e.message), 'warn', 'lock'); }
+        load();
+      });
+      $$('[data-open]', root).forEach(b => b.onclick = () => navTo('#/tallybooks/' + b.dataset.open));
+      $$('[data-sync]', root).forEach(b => b.onclick = async () => {
+        try { const r = await TALLY_API.syncNow(b.dataset.sync); toast(esc(r.message), 'ok', 'plug'); }
+        catch (e) { toast(esc(e.message), 'warn', 'lock'); }
+        TALLY_FAST_UNTIL = Date.now() + 75000;   // the PC picks the request up within a minute; watch for it
         load();
       });
       $('#tally-code-go', root).onclick = () => { const v = $('#tally-code', root).value.trim(); if (v) navTo('#/tally/' + encodeURIComponent(v.toUpperCase())); };
@@ -164,11 +178,14 @@ VIEWS.tally = {
 
     showPairing();
     load();
-    // Keep the page live: a newly approved PC and its companies appear without a reload. Skipped while a dropdown or dialog is in use.
+    // Keep the page live: a newly approved PC, its companies and sync results appear without a reload. Every 3 seconds
+    // while something is expected (just approved, or a sync was requested), otherwise every 10. Skipped while a dropdown or dialog is in use.
+    let lastLoad = Date.now();
     const timer = setInterval(() => {
       if (!root.isConnected) return clearInterval(timer);
+      const every = TALLY_FAST_UNTIL > Date.now() ? 3000 : 10000;
       const busy = (document.activeElement && document.activeElement.tagName === 'SELECT' && root.contains(document.activeElement)) || document.querySelector('.modal.show');
-      if (!busy) load();
-    }, 10000);
+      if (!busy && Date.now() - lastLoad >= every - 200) { lastLoad = Date.now(); load(); }
+    }, 1000);
   }
 };

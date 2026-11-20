@@ -138,8 +138,9 @@ def _owned_agent(db: Session, user: User, agent_id: str) -> TallyAgent:
     return agent
 
 
-def _company_public(c: TallyCompany, agent_name: str = "") -> Dict[str, Any]:
+def _company_public(c: TallyCompany, agent_name: str = "", sync_pending: bool = False) -> Dict[str, Any]:
     return {
+        "sync_pending": sync_pending,
         "id": str(c.id), "company_name": c.company_name, "agent_id": str(c.agent_id), "agent_name": agent_name,
         "client_id": str(c.client_id) if c.client_id else None, "linked": c.client_id is not None,
         "link_method": c.link_method,
@@ -152,10 +153,10 @@ def _company_public(c: TallyCompany, agent_name: str = "") -> Dict[str, Any]:
 @router.get("/companies")
 def list_companies(user: Manager, db: Session = Depends(get_db)):
     rows = db.execute(
-        select(TallyCompany, TallyAgent.name).join(TallyAgent, TallyAgent.id == TallyCompany.agent_id)
+        select(TallyCompany, TallyAgent.name, TallyAgent.sync_requested_at).join(TallyAgent, TallyAgent.id == TallyCompany.agent_id)
         .where(TallyCompany.tenant_id == user.tenant_id).order_by(TallyCompany.company_name)
     ).all()
-    return [_company_public(c, name) for c, name in rows]
+    return [_company_public(c, name, requested is not None) for c, name, requested in rows]
 
 
 class LinkBody(BaseModel):
@@ -256,8 +257,10 @@ def heartbeat(body: Heartbeat, agent: Agent, db: Session = Depends(get_db)):
         if company.client_id is None:
             _try_auto_link(db, agent, company)
         out.append({"company_name": name, "linked": company.client_id is not None})
+    sync_requested = agent.sync_requested_at is not None
+    agent.sync_requested_at = None          # delivered once: if the PC fails mid-sync, the manager asks again
     db.commit()
-    return {"ok": True, "companies": out}
+    return {"ok": True, "companies": out, "sync_requested": sync_requested}
 
 
 class IngestBody(BaseModel):
