@@ -45,7 +45,17 @@ stored vouchers, Firm OS refuses to wipe them and the agent reports it.
 
 ## Build the .exe
 
-`powershell -File build_exe.ps1` (needs `pip install pyinstaller`). The exe keeps a console window so it can show the pairing code; at login it starts minimised. Unsigned executables may be flagged by antivirus; sign the file before giving it to clients.
+```
+powershell -File build_exe.ps1
+```
+
+Produces `dist\FirmOSTallyAgent.exe` (about 9.5 MB, no Python needed on the client PC) and prints its SHA-256. The script builds in a throwaway
+virtual environment under `%TEMP%` (installing PyInstaller and httpx there, not into your main Python), and `dist/` is not committed.
+
+- The exe keeps a console window so it can show the pairing code; at login it starts minimised.
+- Windows SmartScreen or antivirus may warn about an unsigned exe. Sign it with a code-signing certificate before giving it to clients.
+- Run it with no arguments (double-click) to connect and sync; `FirmOSTallyAgent.exe --help` lists the other commands.
+- The tray icon is not included in the exe (it would need `pystray` and `pillow` added to the build environment).
 
 ## Tests
 
@@ -68,4 +78,4 @@ Not yet seen: vouchers with inventory/HSN lines, multi-currency, TDS/TCS ledgers
 (upload cap is 50 MB after decompression), TallyPrime Server or ERP 9. Run `dump` on a real client company before relying on its numbers.
 
 Tally in Educational Mode only accepts vouchers dated the 1st, 2nd or last day of a month; that affects entering test data, not reading it.
-The tray icon and the PyInstaller build have not been run. The PostgreSQL row-level-security part of migration 0013 has not been run on PostgreSQL.
+The tray icon has not been run. The PostgreSQL row-level-security part of migration 0013 has not been run on PostgreSQL.
