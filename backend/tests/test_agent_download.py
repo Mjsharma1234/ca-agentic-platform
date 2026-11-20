@@ -30,7 +30,7 @@ def test_the_published_files_exist_and_the_exe_is_a_windows_program():
 
 
 def test_version_file_describes_exactly_this_exe_and_the_current_agent_version():
-    info = json.loads(INFO.read_text(encoding="utf-8"))
+    info = json.loads(INFO.read_text(encoding="utf-8-sig"))
     data = EXE.read_bytes()
     assert info["sha256"] == hashlib.sha256(data).hexdigest(), "version.json is stale: rebuild with tally-agent/build_exe.ps1"
     assert info["size_bytes"] == len(data)

@@ -26,6 +26,6 @@ $info = [ordered]@{
     name = "FirmOSTallyAgent.exe"; version = $version; size_bytes = (Get-Item $exe).Length; sha256 = $hash
     built = (Get-Date -Format "yyyy-MM-dd"); signed = $false
 }
-$info | ConvertTo-Json | Set-Content -Encoding UTF8 (Join-Path $downloads "version.json")
+[System.IO.File]::WriteAllText((Join-Path $downloads "version.json"), ($info | ConvertTo-Json), (New-Object System.Text.UTF8Encoding $false))   # UTF-8 without a byte-order mark
 Write-Host "Published to $downloads"
 Write-Host "Sign it before giving it to clients; unsigned files are often flagged by antivirus and SmartScreen."
